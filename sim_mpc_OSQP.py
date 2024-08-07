@@ -96,11 +96,6 @@ def sim_mpc_OSQP(
     ))
 
     osqp_solver = osqp.OSQP()
-    # print("q size: " + str((np.zeros((np.size(q_mat, 0), 1))).shape))
-    # print("P size: " + str(J.shape))
-    # print("A size: " + str(A_constr.shape))
-    # print("l size: " + str(l_constr.shape))
-    # print("u size: " + str(u_constr.shape))
     osqp_solver.setup(P=J, q=np.zeros((1 , np.size(q_mat, 0))),
                        A=A_constr, l=l_constr, u=u_constr, **settings)
     
