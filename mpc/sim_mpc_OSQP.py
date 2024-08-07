@@ -218,5 +218,3 @@ def sim_mpc_OSQP(
     u_sim = np.transpose(u_sim)
     y_sim = np.transpose(y_sim)
     return y_sim, u_sim
-
-y_sim, u_sim = sim_mpc_OSQP(n_samples, n_delay, dist, Ap, Bp, Cp, Ao, Bo, Co, Ad, Cd, LxN_obs, Lxd_obs, J_MPC, q_mat, y_max, u_max, u_rate, id_to_bpm, id_to_cm, A_awr, B_awr, C_awr, D_awr, SOFB_setp, ol_mode)
