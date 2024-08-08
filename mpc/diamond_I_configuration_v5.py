@@ -1,5 +1,5 @@
 import numpy as np
-
+#Corrected for 0-based indexing
 def diamond_I_configuration_v5(RMorigx, RMorigy, square_config=False):
     TOT_BPM = 173
     TOT_CM = 172
@@ -22,18 +22,18 @@ def diamond_I_configuration_v5(RMorigx, RMorigy, square_config=False):
     bad_cm_y = np.sort(bad_cm_y)
 
     # Generate IDs as used by the FOFB
-    id_to_bpm_x = np.arange(1, TOT_BPM + 1)
-    id_to_bpm_x = np.delete(id_to_bpm_x, bad_bpm_x - 1)
-    id_to_bpm_y = np.arange(1, TOT_BPM + 1)
-    id_to_bpm_y = np.delete(id_to_bpm_y, bad_bpm_y - 1)
-    id_to_cm_x = np.arange(1, TOT_CM + 1)
-    id_to_cm_x = np.delete(id_to_cm_x, bad_cm_x - 1)
-    id_to_cm_y = np.arange(1, TOT_CM + 1)
-    id_to_cm_y = np.delete(id_to_cm_y, bad_cm_y - 1)
+    id_to_bpm_x = np.arange(TOT_BPM)
+    id_to_bpm_x = np.delete(id_to_bpm_x, bad_bpm_x)
+    id_to_bpm_y = np.arange(TOT_BPM)
+    id_to_bpm_y = np.delete(id_to_bpm_y, bad_bpm_y)
+    id_to_cm_x = np.arange(TOT_CM)
+    id_to_cm_x = np.delete(id_to_cm_x, bad_cm_x)
+    id_to_cm_y = np.arange(TOT_CM)
+    id_to_cm_y = np.delete(id_to_cm_y, bad_cm_y)
 
     # Ensure full rank
-    assert np.linalg.matrix_rank(RMorigx[np.ix_(id_to_bpm_x - 1, id_to_cm_x - 1)]) == len(id_to_bpm_x)
-    assert np.linalg.matrix_rank(RMorigy[np.ix_(id_to_bpm_y - 1, id_to_cm_y - 1)]) == len(id_to_bpm_y)
+    assert np.linalg.matrix_rank(RMorigx[np.ix_(id_to_bpm_x, id_to_cm_x)]) == len(id_to_bpm_x)
+    assert np.linalg.matrix_rank(RMorigy[np.ix_(id_to_bpm_y, id_to_cm_y)]) == len(id_to_bpm_y)
 
     for i in bad_bpm_x:
         assert i not in id_to_bpm_x
@@ -45,3 +45,4 @@ def diamond_I_configuration_v5(RMorigx, RMorigy, square_config=False):
         assert i not in id_to_cm_y
 
     return id_to_bpm_x, id_to_cm_x, id_to_bpm_y, id_to_cm_y
+
