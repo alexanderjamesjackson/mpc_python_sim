@@ -4,6 +4,10 @@ from scipy.io import loadmat
 import sim_mpc_OSQP as simOSQP
 import diamond_I_configuration_v5 as DI
 import pandas as pd
+import matplotlib.pyplot as plt
+import time
+
+start = time.time()
 
 # options
 fname_RM = '../orms/GoldenBPMResp_DIAD.mat'
@@ -110,9 +114,8 @@ J_mpc = np.transpose(Bo) @ P_mpc @ Bo + R_mpc
 S_sp_pinv_x = S_sp_pinv[:nx,:]
 S_sp_pinv_u = S_sp_pinv[nx:,:]
 q_mat_x0 = np.transpose(Bo) @ P_mpc @ Ao
-q_mat_xd = -1 * (np.hstack((Bo.T @ P_mpc, R_mpc)) @ np.vstack((S_sp_pinv_x, S_sp_pinv_u)) @ Cd)
+q_mat_xd = (np.hstack((Bo.T @ P_mpc, R_mpc)) @ np.vstack((S_sp_pinv_x, S_sp_pinv_u)) @ Cd)
 q_mat = np.hstack((q_mat_x0, q_mat_xd))
-
 #Rate limiter on VME processors
 mat_data.update(loadmat('../data/awrSS.mat'))
 
@@ -154,6 +157,7 @@ SOFB_setp = np.where(SOFB_setp > u_max, u_max, SOFB_setp)
 SOFB_setp = np.where(SOFB_setp < -u_max, -u_max, SOFB_setp)
 
 
+#Up to here correct implementation
 y_sim ,u_sim = simOSQP.sim_mpc_OSQP(
     n_samples, n_delay, doff,
     Ap, Bp, Cp, 
@@ -167,6 +171,40 @@ y_sim ,u_sim = simOSQP.sim_mpc_OSQP(
 
 
 
+
+scale_u = 0.001
+
+fig, axs = plt.subplots(2, 4, figsize=(15, 8))
+
+# Subplot 1: Disturbance
+axs[0, 0].plot(doff[id_to_bpm, :].T)
+axs[0, 0].set_title('Disturbance')
+
+# Subplot 2: Disturbance Mode Space
+axs[0, 1].plot((UR.T @ doff[id_to_bpm, :]).T)
+axs[0, 1].set_title('Disturbance Mode Space')
+
+# Subplot 3: Input
+axs[0, 2].plot(u_sim[:, id_to_cm] * scale_u)
+axs[0, 2].set_title('Input')
+
+# Subplot 4: Input Mode Space
+axs[0, 3].plot(scale_u * u_sim[:, id_to_cm] @ VR)
+axs[0, 3].set_title('Input Mode Space')
+
+# Subplot 5: Output
+axs[1, 0].plot(y_sim[:, id_to_bpm])
+axs[1, 0].set_title('Output')
+
+# Subplot 6: Output Mode Space
+axs[1, 1].plot(y_sim[:, id_to_bpm] @ UR)
+axs[1, 1].set_title('Output Mode Space')
+
+print("Time taken: ", time.time() - start)
+
+# Adjust layout for better spacing
+plt.tight_layout()
+plt.show()
 
 
 

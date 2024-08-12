@@ -12,7 +12,6 @@ def sim_mpc_OSQP(
         A_awr, B_awr, C_awr, D_awr,
         SOFB_setp,
         ol_mode = False):
-    
     assert(n_delay == 8) or (n_delay == 9)
     use_single = False
     hil_mode = True
@@ -87,10 +86,11 @@ def sim_mpc_OSQP(
     
     A_constr = sparse.csr_matrix(np.vstack((np.eye(ny_obs), Co @ Bo)), dtype=dtype)
 
-    l_constr = np.vstack((
+    l_constr = np.vstack(( 
         np.maximum(-u_max - SOFB_setp, -u_rate + y_awr),
         -y_max - y_mat @ x0_obs_new
     ))
+
     u_constr = np.vstack((
         np.minimum(u_max - SOFB_setp, u_rate + y_awr),
         y_max - y_mat @ x0_obs_new
@@ -102,23 +102,24 @@ def sim_mpc_OSQP(
     
     x0_obs = np.zeros((nx_obs, n_samples))
     xd_obs = np.zeros((ny_obs, n_samples))
+
+
     for k in range(n_samples):
         #Measurements
         if k % 100 == 0:
             print(f"Simulation progress: {k/n_samples*100:.2f}%")
-            
-        if ol_mode == True:
+
+        if ol_mode:
             y_sim[:, k:k+1] = dist[:, k:k+1] #
         else:
             y_sim[:, k:k+1] = (Cp @ x_sim_new) + dist[:, k:k+1]
        
-        if k > n_delay:
+        if k >= n_delay:
             
             if hil_mode ==  True:
                 y_meas = (np.round(y_sim[id_to_bpm, k - n_delay][:, np.newaxis] * 1000, 0) * 0.001).astype(dtype)
             else:
-                y_meas = y_sim[id_to_bpm, k-n_delay].astype(dtype)
-
+                y_meas = y_sim[id_to_bpm, k-n_delay][:, np.newaxis].astype(dtype)
             #Observer - State update
             x0_obs_new = (Ao @ x0_obs_old) + (Bo @ u_sim[id_to_cm, k-1][:, np.newaxis].astype(dtype))
             xd_obs_new = Ad @ xd_obs_old
@@ -132,6 +133,7 @@ def sim_mpc_OSQP(
             x8_obs_new = x7_obs_old
             if(n_delay == 9):
                 x9_obs_new = x8_obs_old
+
             #Observer - Measurement update
             if(n_delay == 9):
                 delta_y = y_meas - Co @ x9_obs_new - Cd @ xd_obs_new
@@ -178,7 +180,6 @@ def sim_mpc_OSQP(
 
             #Compute q-vector
             q = q_mat @ np.vstack((x0_obs_new, xd_obs_new))
-
             #Compute lower and upper limits
             if dtype == np.float32:
                 l_constr = np.vstack((
@@ -190,9 +191,6 @@ def sim_mpc_OSQP(
                     y_max - y_mat @ x0_obs_new.astype(dtype)
                 ))
             else:
-                # print(y_awr.shape)
-                # print(np.maximum(-u_max - SOFB_setp.astype(dtype), -u_rate + y_awr.astype(dtype)).shape)
-                # print((-y_max - y_mat @ x0_obs_new.astype(dtype) - xd_obs_new.astype(dtype)).shape)
                 l_constr = np.vstack((
                     np.maximum(-u_max - SOFB_setp.astype(dtype), -u_rate + y_awr.astype(dtype)),
                     -y_max - y_mat @ x0_obs_new.astype(dtype) - xd_obs_new.astype(dtype)
@@ -202,15 +200,15 @@ def sim_mpc_OSQP(
                     y_max - y_mat @ x0_obs_new.astype(dtype) - xd_obs_new.astype(dtype)
                 ))
 
-            
-            osqp_solver.update(l=l_constr, u=u_constr, q=q)
+            osqp_solver.update(q=q, l=l_constr, u=u_constr)
             result = osqp_solver.solve()
             osqp_result = result.x[:nu_obs][:, np.newaxis]
             assert result.info.status_val in [1, 2], "OSQP solver did not find an optimal solution."
 
             if hil_mode == True:
                 osqp_result = np.round(osqp_result * 1000000,0) * 0.000001
-            u_sim[id_to_cm, k][:, np.newaxis] = osqp_result.astype(np.float64)
+            u_sim[id_to_cm, k] = osqp_result.flatten()
+
             #AWR
             x_awr_old = x_awr_new
             x_awr_new = A_awr @ x_awr_old + B_awr @ osqp_result.astype(np.float64)
