@@ -103,8 +103,10 @@ def sim_mpc_OSQP(
     x0_obs = np.zeros((nx_obs, n_samples))
     xd_obs = np.zeros((ny_obs, n_samples))
     for k in range(n_samples):
-        print(k)
         #Measurements
+        if k % 100 == 0:
+            print(f"Simulation progress: {k/n_samples*100:.2f}%")
+            
         if ol_mode == True:
             y_sim[:, k:k+1] = dist[:, k:k+1] #
         else:
@@ -204,7 +206,6 @@ def sim_mpc_OSQP(
             osqp_solver.update(l=l_constr, u=u_constr, q=q)
             result = osqp_solver.solve()
             osqp_result = result.x[:nu_obs][:, np.newaxis]
-            print(result.info.status_val)
             assert result.info.status_val in [1, 2], "OSQP solver did not find an optimal solution."
 
             if hil_mode == True:

@@ -110,7 +110,7 @@ J_mpc = np.transpose(Bo) @ P_mpc @ Bo + R_mpc
 S_sp_pinv_x = S_sp_pinv[:nx,:]
 S_sp_pinv_u = S_sp_pinv[nx:,:]
 q_mat_x0 = np.transpose(Bo) @ P_mpc @ Ao
-q_mat_xd = -1* np.hstack((np.transpose(Bo) @ P_mpc, R_mpc)) @ np.vstack((S_sp_pinv_x, S_sp_pinv_u)) @ (-Cd)
+q_mat_xd = -1 * (np.hstack((Bo.T @ P_mpc, R_mpc)) @ np.vstack((S_sp_pinv_x, S_sp_pinv_u)) @ Cd)
 q_mat = np.hstack((q_mat_x0, q_mat_xd))
 
 #Rate limiter on VME processors
@@ -135,13 +135,12 @@ else:
     UR, SR, VR = np.linalg.svd(RMx)
 
 mag_u = 10*1000
-tmp = UR[:, imode] * SR[imode] * mag_u
+tmp = UR[:, imode - 1] * SR[imode - 1] * mag_u
 doff_tmp = np.zeros((TOT_BPM, 1))
 doff_tmp[id_to_bpm] = tmp[:, np.newaxis]
 doff = doff_tmp * np.ones((1,n_samples))
 don = doff
 y_max = np.ones((id_to_bpm.size, 1)) * 850
-
 #Simulation
 
 endt = n_samples*Ts - Ts
@@ -153,6 +152,8 @@ SOFB_setpoints = np.zeros((1,172))
 SOFB_setp = np.transpose(SOFB_setpoints[:,id_to_cm])
 SOFB_setp = np.where(SOFB_setp > u_max, u_max, SOFB_setp)
 SOFB_setp = np.where(SOFB_setp < -u_max, -u_max, SOFB_setp)
+
+
 y_sim ,u_sim = simOSQP.sim_mpc_OSQP(
     n_samples, n_delay, doff,
     Ap, Bp, Cp, 
