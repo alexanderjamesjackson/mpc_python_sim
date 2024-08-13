@@ -15,6 +15,7 @@ class MpcOsqp:
         SOFB_setp,
         ol_mode = False, dtype = np.float64, hil_mode = True):
 
+        #Initialise solver parameters
         self.n_samples = n_samples
         self.n_delay = n_delay
         self.dist = dist
@@ -65,8 +66,11 @@ class MpcOsqp:
         self.x_obs_new = np.zeros((n_delay + 1, self.nx_obs, 1), dtype=dtype)
         self.xd_obs_old = np.zeros((self.nx_obs, 1), dtype=dtype)
         self.xd_obs_new = np.zeros((self.nx_obs, 1), dtype=dtype)
+        self.x0_obs = np.zeros((n_samples, self.nx_obs, 1))
+        self.xd_obs = np.zeros((n_samples, self.nx_obs, 1))
         self.Apow = np.zeros((n_delay + 1, self.nx_obs, self.nx_obs), dtype=dtype)
         
+        #Compute elementwise powers in advance
         for i in range(n_delay + 1):
             self.Apow[i] = (self.Ao ** i).astype(dtype)
 
@@ -76,6 +80,8 @@ class MpcOsqp:
         self.u_max = u_max.astype(dtype)
         self.y_mat = (self.Co @ self.Ao).astype(dtype)
         self.y_meas = np.zeros((self.ny_obs, 1), dtype=dtype)
+
+        #Setup constraints
 
         self.A_constr = sparse.csr_matrix(np.vstack((np.eye(self.ny_obs), Co @ Bo)), dtype=dtype)
 
@@ -89,12 +95,14 @@ class MpcOsqp:
             y_max - self.y_mat @ self.x_obs_new[0]
         ))
 
+
+    #Initialises OSQP solver
     def setupOSQP(self, verbose,
         polish,
         adaptive_rho,
         MAX_ITER,
         check_termination):
-
+        
         settings = {
             'verbose': verbose,
             'polish': polish,
@@ -138,6 +146,8 @@ class MpcOsqp:
     def update_obs_state(self,k):
         self.xd_obs_old = self.xd_obs_new
         self.x_obs_old = self.x_obs_new[:self.n_delay][:][:]
+        self.x0_obs[k] = self.x_obs_new[0]
+        self.xd_obs[k] = self.xd_obs_new
 
     def update_q_limits(self,k):
         ####
@@ -161,7 +171,8 @@ class MpcOsqp:
                 np.minimum(self.u_max - self.SOFB_setp.astype(self.dtype), self.u_rate + self.y_awr.astype(self.dtype)),
                 self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype) - self.xd_obs_new.astype(self.dtype)
             ))
-    
+
+    #Solves the QP problem and updates the AWR state
     def solve_update_awr(self,k):
         self.osqp_solver.update(q=self.q, l=self.l_constr, u=self.u_constr)
         result = self.osqp_solver.solve()
@@ -199,7 +210,9 @@ class MpcOsqp:
 
         self.u_sim = np.transpose(self.u_sim)
         self.y_sim = np.transpose(self.y_sim)
+        # self.x0_obs = np.transpose(self.x0_obs)
+        # self.xd_obs = np.transpose(self.xd_obs)
 
-        return self.y_sim, self.u_sim
+        return self.y_sim, self.u_sim, self.x0_obs, self.xd_obs
 
 

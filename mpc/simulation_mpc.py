@@ -6,6 +6,8 @@ import diamond_I_configuration_v5 as DI
 import pandas as pd
 import matplotlib.pyplot as plt
 import time
+import torch
+import os
 
 start = time.time()
 
@@ -41,13 +43,21 @@ RMx = RMorigx[np.ix_(id_to_bpm_x, id_to_cm_x)]
 RMy = RMorigy[np.ix_(id_to_bpm_y, id_to_cm_y)]
 
 #Observer and Regulator
-system_path = '../data/mpc_data_02092022_nd8.mat'
-mat_data = loadmat(system_path)
 n_delay = 9
+
+if n_delay == 8:
+    system_path = '../data/mpc_data_02092022_nd8.mat'
+    mat_data = loadmat(system_path)
+
+if n_delay == 9:
+    system_path = '../data/mpc_data_13092022_nd9.mat'
+    mat_data = loadmat(system_path)
+
+
 Fs = 10000
 Ts = 1/Fs
-fname = fname = f'../data/mpc_data_13092022_nd{n_delay}.mat'
-mat_data.update(loadmat(fname))
+# fname = fname = f'../data/mpc_data_13092022_nd{n_delay}.mat'
+# mat_data.update(loadmat(fname))
 
 if pick_direction == 'vertical':
     id_to_bpm = id_to_bpm_y
@@ -117,8 +127,11 @@ q_mat_x0 = np.transpose(Bo) @ P_mpc @ Ao
 q_mat_xd = (np.hstack((Bo.T @ P_mpc, R_mpc)) @ np.vstack((S_sp_pinv_x, S_sp_pinv_u)) @ Cd)
 q_mat = np.hstack((q_mat_x0, q_mat_xd))
 #Rate limiter on VME processors
-mat_data.update(loadmat('../data/awrSS.mat'))
+if pick_direction == 'vertical':
+    mat_data.update(loadmat('../data/awrSSy.mat'))
 
+else:
+    mat_data.update(loadmat('../data/awrSSx.mat'))
 
 #Measurement Data
 if do_step:
@@ -167,10 +180,46 @@ mpc_osqp = simOSQP.MpcOsqp(
     mat_data['A'], mat_data['B'], mat_data['C'], mat_data['D'],
     SOFB_setp,False)
 
-y_sim ,u_sim = mpc_osqp.sim_mpc_OSQP()
+y_sim ,u_sim, x0_obs, xd_obs = mpc_osqp.sim_mpc_OSQP()
+print(u_sim.shape)
+x0_obs = x0_obs.squeeze()
+xd_obs = xd_obs.squeeze()
+print(x0_obs.shape)
+print(xd_obs.shape) 
+
+x_data = np.hstack((x0_obs, xd_obs))
+print(x_data.shape)
+
+#Concatenate x_data and u_data along the second axis
+combined_data = np.hstack((x_data, u_sim))
+
+np.random.seed(42)
+#Shuffle the combined data randomly
+np.random.shuffle(combined_data)
+
+#Split the combined data back into x and u components
+
+x_data_shuffled = combined_data[:, :330]
+u_data_shuffled = combined_data[:, 330:]
+
+#Split the shuffled data into training and testing sets
+train_size = int(0.8 * combined_data.shape[0])
+
+x_train = torch.tensor(x_data_shuffled[:train_size])
+x_test = torch.tensor(x_data_shuffled[train_size:])
+
+u_train = torch.tensor(u_data_shuffled[:train_size])
+u_test = torch.tensor(u_data_shuffled[train_size:])
 
 
-# Up to here correct implementation
+data_dir = '../data/'
+torch.save(x_train.float(), os.path.join(data_dir, 'x_train.pt'))
+torch.save(x_test.float(), os.path.join(data_dir, 'x_test.pt'))
+torch.save(u_train.float(), os.path.join(data_dir, 'u_train.pt'))
+torch.save(u_test.float(), os.path.join(data_dir, 'u_test.pt'))
+
+
+
 # y_sim ,u_sim = simOSQP.sim_mpc_OSQP(
 #     n_samples, n_delay, doff,
 #     Ap, Bp, Cp, 
