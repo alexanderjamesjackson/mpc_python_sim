@@ -2,8 +2,10 @@ import osqp
 import numpy as np
 import scipy.sparse as sparse
 
-def sim_mpc_OSQP(
-        n_samples, n_delay, dist,
+
+class MpcOsqp:
+    def __init__(
+        self, n_samples, n_delay, dist,
         Ap, Bp, Cp,
         Ao, Bo, Co, Ad, Cd, LxN_obs, Lxd_obs,
         J_MPC, q_mat, y_max,
@@ -11,211 +13,193 @@ def sim_mpc_OSQP(
         id_to_bpm, id_to_cm,
         A_awr, B_awr, C_awr, D_awr,
         SOFB_setp,
-        ol_mode = False):
-    assert(n_delay == 8) or (n_delay == 9)
-    use_single = False
-    hil_mode = True
+        ol_mode = False, dtype = np.float64, hil_mode = True):
 
-    #Extract plant and observer dimensions
-    nx_plant, nu_plant = np.size(Bp,0) , np.size(Bp,1)
-    ny_plant = np.size(Cp,0)
-    nx_obs, nu_obs = np.size(Bo,0) , np.size(Bo,1)
-    ny_obs = np.size(Co,0)
-
-    #Variables for plant
-    x_sim_new, x_sim_old = np.zeros((nx_plant, 1)) , np.zeros((nx_plant, 1))
-    y_sim = np.zeros((ny_plant, n_samples))
-    u_sim = np.zeros((nu_plant, n_samples))
-
-    #Variables for AWR
-    ny_awr , nx_awr = np.size(C_awr,0) , np.size(C_awr,1)
-    x_awr_new = np.zeros((nx_awr, 1))
-    y_awr = np.zeros((ny_awr, 1))
-
-    #Variables for observer
-    if use_single == True:
-        dtype = np.float32
-    else:
-        dtype = np.float64
-    
-    x0_obs_new = np.zeros((nx_obs, 1), dtype=dtype)
-    x0_obs_old = np.zeros((nx_obs, 1), dtype=dtype)
-    x1_obs_old = np.zeros((nx_obs, 1), dtype=dtype)
-    x2_obs_old = np.zeros((nx_obs, 1), dtype=dtype)
-    x3_obs_old = np.zeros((nx_obs, 1), dtype=dtype)
-    x4_obs_old = np.zeros((nx_obs, 1), dtype=dtype)
-    x5_obs_old = np.zeros((nx_obs, 1), dtype=dtype)
-    x6_obs_old = np.zeros((nx_obs, 1), dtype=dtype)
-    x7_obs_old = np.zeros((nx_obs, 1), dtype=dtype)
-    x8_obs_old = np.zeros((nx_obs, 1), dtype=dtype)
-    xd_obs_old = np.zeros((ny_obs, 1), dtype=dtype)
-    Apow1 = (Ao ** 1).astype(dtype)
-    Apow2 = (Ao ** 2).astype(dtype)
-    Apow3 = (Ao ** 3).astype(dtype)
-    Apow4 = (Ao ** 4).astype(dtype)
-    Apow5 = (Ao ** 5).astype(dtype)
-    Apow6 = (Ao ** 6).astype(dtype)
-    Apow7 = (Ao ** 7).astype(dtype)
-    Apow8 = (Ao ** 8).astype(dtype)
-    Apow9 = (Ao ** 9).astype(dtype)
-
-    Ao = Ao.astype(dtype)
-    Bo = Bo.astype(dtype)
-    Co = Co.astype(dtype)
-    Ad = Ad.astype(dtype)
-    Cd = Cd.astype(dtype)
-    LxN_obs = LxN_obs.astype(dtype)
-    Lxd_obs = Lxd_obs.astype(dtype)
-
-    #Variables Solver
-    J = sparse.csc_matrix(J_MPC, dtype=dtype)
-    q_mat = q_mat.astype(dtype)
-    y_max = y_max.astype(dtype)
-    u_max = u_max.astype(dtype)
-    y_mat = (Co@Ao).astype(dtype)
+        self.n_samples = n_samples
+        self.n_delay = n_delay
+        self.dist = dist
+        self.dtype = dtype
+        self.Ap = Ap.astype(dtype)
+        self.Bp = Bp.astype(dtype)
+        self.Cp = Cp.astype(dtype)
+        self.Ao = Ao.astype(dtype)
+        self.Bo = Bo.astype(dtype)
+        self.Co = Co.astype(dtype)
+        self.Ad = Ad.astype(dtype)
+        self.Cd = Cd.astype(dtype)
+        self.LxN_obs = LxN_obs.astype(dtype)
+        self.Lxd_obs = Lxd_obs.astype(dtype)
+        self.J = sparse.csc_matrix(J_MPC, dtype=dtype)
+        self.u_max = u_max.astype(dtype)
+        self.u_rate = u_rate.astype(dtype)
+        self.id_to_bpm = id_to_bpm
+        self.id_to_cm = id_to_cm
+        self.A_awr = A_awr.astype(dtype)
+        self.B_awr = B_awr.astype(dtype)
+        self.C_awr = C_awr.astype(dtype)
+        self.D_awr = D_awr.astype(dtype)
+        self.SOFB_setp = SOFB_setp
+        self.ol_mode = ol_mode
+        self.hil_mode = hil_mode
 
 
-    MAX_ITER = 20
-    settings = {
-        'verbose': False,
-        'polish': False,
-        'adaptive_rho': False,
-        'max_iter': MAX_ITER,
-        'check_termination': MAX_ITER
-    }
-    
-    A_constr = sparse.csr_matrix(np.vstack((np.eye(ny_obs), Co @ Bo)), dtype=dtype)
+        #extract dimensions
+        self.nx_plant, self.nu_plant = np.size(Bp,0) , np.size(Bp,1)
+        self.ny_plant = np.size(Cp,0)
+        self.nx_obs, self.nu_obs = np.size(Bo,0) , np.size(Bo,1)
+        self.ny_obs = np.size(Co,0)
 
-    l_constr = np.vstack(( 
-        np.maximum(-u_max - SOFB_setp, -u_rate + y_awr),
-        -y_max - y_mat @ x0_obs_new
-    ))
+        #Variables for plant
+        np.random.seed(42)
+        self.x_sim = np.zeros((self.nx_plant, 1))
+        self.y_sim = np.zeros((self.ny_plant, n_samples))
+        self.u_sim = np.zeros((self.nu_plant, n_samples))
 
-    u_constr = np.vstack((
-        np.minimum(u_max - SOFB_setp, u_rate + y_awr),
-        y_max - y_mat @ x0_obs_new
-    ))
+        #Variables for AWR
+        self.ny_awr , self.nx_awr = np.size(C_awr,0) , np.size(C_awr,1)
+        self.x_awr = np.zeros((self.nx_awr, 1))
+        self.y_awr = np.zeros((self.ny_awr, 1))
 
-    osqp_solver = osqp.OSQP()
-    osqp_solver.setup(P=J, q=np.zeros(np.size(q_mat, 0)),
-                       A=A_constr, l=l_constr, u=u_constr, **settings)
-    
-    x0_obs = np.zeros((nx_obs, n_samples))
-    xd_obs = np.zeros((ny_obs, n_samples))
+        #Variables for observer
+        self.x_obs_old = np.zeros((n_delay, self.nx_obs, 1), dtype=dtype)
+        self.x_obs_new = np.zeros((n_delay + 1, self.nx_obs, 1), dtype=dtype)
+        self.xd_obs_old = np.zeros((self.nx_obs, 1), dtype=dtype)
+        self.xd_obs_new = np.zeros((self.nx_obs, 1), dtype=dtype)
+        self.Apow = np.zeros((n_delay + 1, self.nx_obs, self.nx_obs), dtype=dtype)
+        
+        for i in range(n_delay + 1):
+            self.Apow[i] = (self.Ao ** i).astype(dtype)
+
+        
+        self.q_mat = q_mat.astype(dtype)
+        self.y_max = y_max.astype(dtype)
+        self.u_max = u_max.astype(dtype)
+        self.y_mat = (self.Co @ self.Ao).astype(dtype)
+        self.y_meas = np.zeros((self.ny_obs, 1), dtype=dtype)
+
+        self.A_constr = sparse.csr_matrix(np.vstack((np.eye(self.ny_obs), Co @ Bo)), dtype=dtype)
+
+        self.l_constr = np.vstack(( 
+            np.maximum(-u_max - SOFB_setp, -u_rate + self.y_awr),
+            -y_max - self.y_mat @ self.x_obs_new[0]
+        ))
+
+        self.u_constr = np.vstack((
+            np.minimum(u_max - SOFB_setp, u_rate + self.y_awr),
+            y_max - self.y_mat @ self.x_obs_new[0]
+        ))
+
+    def setupOSQP(self, verbose,
+        polish,
+        adaptive_rho,
+        MAX_ITER,
+        check_termination):
+
+        settings = {
+            'verbose': verbose,
+            'polish': polish,
+            'adaptive_rho': adaptive_rho,
+            'max_iter': MAX_ITER,
+            'check_termination': check_termination
+        }
+
+        self.osqp_solver = osqp.OSQP()
+        self.osqp_solver.setup(P=self.J, q=np.zeros(np.size(self.q_mat, 0)),
+                       A=self.A_constr, l=self.l_constr, u=self.u_constr, **settings)
 
 
-    for k in range(n_samples):
-        #Measurements
-        if k % 100 == 0:
-            print(f"Simulation progress: {k/n_samples*100:.2f}%")
-
-        if ol_mode:
-            y_sim[:, k:k+1] = dist[:, k:k+1] #
+    def update_y_sim(self, k):
+        if self.ol_mode:
+            self.y_sim[:, k:k+1] = self.dist[:, k:k+1]
         else:
-            y_sim[:, k:k+1] = (Cp @ x_sim_new) + dist[:, k:k+1]
-       
-        if k >= n_delay:
-            
-            if hil_mode ==  True:
-                y_meas = (np.round(y_sim[id_to_bpm, k - n_delay][:, np.newaxis] * 1000, 0) * 0.001).astype(dtype)
-            else:
-                y_meas = y_sim[id_to_bpm, k-n_delay][:, np.newaxis].astype(dtype)
-            #Observer - State update
-            x0_obs_new = (Ao @ x0_obs_old) + (Bo @ u_sim[id_to_cm, k-1][:, np.newaxis].astype(dtype))
-            xd_obs_new = Ad @ xd_obs_old
-            x1_obs_new = x0_obs_old
-            x2_obs_new = x1_obs_old
-            x3_obs_new = x2_obs_old
-            x4_obs_new = x3_obs_old
-            x5_obs_new = x4_obs_old
-            x6_obs_new = x5_obs_old
-            x7_obs_new = x6_obs_old
-            x8_obs_new = x7_obs_old
-            if(n_delay == 9):
-                x9_obs_new = x8_obs_old
+            self.y_sim[:, k:k+1] = (self.Cp @ self.x_sim) + self.dist[:, k:k+1]
 
-            #Observer - Measurement update
-            if(n_delay == 9):
-                delta_y = y_meas - Co @ x9_obs_new - Cd @ xd_obs_new
-            else:
-                delta_y = y_meas - Co @ x8_obs_new - Cd @ xd_obs_new
-            delta_xN = LxN_obs @ delta_y
-            delta_xd = Lxd_obs @ delta_y
-            xd_obs_new = xd_obs_new + delta_xd
-            if (n_delay == 9):
-                x9_obs_new = x9_obs_new + delta_xN
-                x8_obs_new = x8_obs_new + Apow1 @ delta_xN
-                x7_obs_new = x7_obs_new + Apow2 @ delta_xN
-                x6_obs_new = x6_obs_new + Apow3 @ delta_xN
-                x5_obs_new = x5_obs_new + Apow4 @ delta_xN
-                x4_obs_new = x4_obs_new + Apow5 @ delta_xN
-                x3_obs_new = x3_obs_new + Apow6 @ delta_xN
-                x2_obs_new = x2_obs_new + Apow7 @ delta_xN
-                x1_obs_new = x1_obs_new + Apow8 @ delta_xN
-                x0_obs_new = x0_obs_new + Apow9 @ delta_xN
-            else:
-                x8_obs_new = x8_obs_new + delta_xN
-                x7_obs_new = x7_obs_new + Apow1 @ delta_xN
-                x6_obs_new = x6_obs_new + Apow2 @ delta_xN
-                x5_obs_new = x5_obs_new + Apow3 @ delta_xN
-                x4_obs_new = x4_obs_new + Apow4 @ delta_xN
-                x3_obs_new = x3_obs_new + Apow5 @ delta_xN
-                x2_obs_new = x2_obs_new + Apow6 @ delta_xN
-                x1_obs_new = x1_obs_new + Apow7 @ delta_xN
-                x0_obs_new = x0_obs_new + Apow8 @ delta_xN
-            #Update observer states
-            xd_obs_old = xd_obs_new
-            x0_obs_old = x0_obs_new
-            x1_obs_old = x1_obs_new
-            x2_obs_old = x2_obs_new
-            x3_obs_old = x3_obs_new
-            x4_obs_old = x4_obs_new
-            x5_obs_old = x5_obs_new
-            x6_obs_old = x6_obs_new
-            x7_obs_old = x7_obs_new
-            if (n_delay == 9):
-                x8_obs_old = x8_obs_new
-            x0_obs[:,k:k+1] = x0_obs_new
-            xd_obs[:,k:k+1] = xd_obs_new
+    def update_y_meas(self, k):
+        if self.hil_mode ==  True:
+            self.y_meas = (np.round(self.y_sim[self.id_to_bpm, k - self.n_delay][:, np.newaxis] * 1000, 0) * 0.001).astype(self.dtype)
+        else:
+            self.y_meas = self.y_sim[self.id_to_bpm, k-self.n_delay][:, np.newaxis].astype(self.dtype)
 
-            #Compute q-vector
-            q = q_mat @ np.vstack((x0_obs_new, xd_obs_new))
-            #Compute lower and upper limits
-            if dtype == np.float32:
-                l_constr = np.vstack((
-                    np.maximum(-u_max - SOFB_setp.astype(dtype), -u_rate + y_awr.astype(dtype)),
-                    -y_max - y_mat @ x0_obs_new.astype(dtype)
-                ))
-                u_constr = np.vstack((
-                    np.minimum(u_max - SOFB_setp.astype(dtype), u_rate + y_awr.astype(dtype)),
-                    y_max - y_mat @ x0_obs_new.astype(dtype)
-                ))
-            else:
-                l_constr = np.vstack((
-                    np.maximum(-u_max - SOFB_setp.astype(dtype), -u_rate + y_awr.astype(dtype)),
-                    -y_max - y_mat @ x0_obs_new.astype(dtype) - xd_obs_new.astype(dtype)
-                ))
-                u_constr = np.vstack((
-                    np.minimum(u_max - SOFB_setp.astype(dtype), u_rate + y_awr.astype(dtype)),
-                    y_max - y_mat @ x0_obs_new.astype(dtype) - xd_obs_new.astype(dtype)
-                ))
+    def calc_obs_state(self, k):
+        self.x_obs_new[0] = (self.Ao @ self.x_obs_old[0]) + (self.Bo @ self.u_sim[self.id_to_cm, k-1][:, np.newaxis].astype(self.dtype))
+        self.xd_obs_new = self.Ad @ self.xd_obs_old
+        for i in range(1, self.n_delay + 1):
+            self.x_obs_new[i] = self.x_obs_old[i-1]
 
-            osqp_solver.update(q=q, l=l_constr, u=u_constr)
-            result = osqp_solver.solve()
-            osqp_result = result.x[:nu_obs][:, np.newaxis]
-            assert result.info.status_val in [1, 2], "OSQP solver did not find an optimal solution."
+    def update_obs_measurement(self,k):
+        delta_y = self.y_meas - self.Co @ self.x_obs_new[self.n_delay] - self.Cd @ self.xd_obs_new
+        delta_xN = self.LxN_obs @ delta_y
+        delta_xd = self.Lxd_obs @ delta_y
+        self.xd_obs_new = self.xd_obs_new + delta_xd
 
-            if hil_mode == True:
-                osqp_result = np.round(osqp_result * 1000000,0) * 0.000001
-            u_sim[id_to_cm, k] = osqp_result.flatten()
+        for i in range(self.n_delay + 1):
+            self.x_obs_new[i] = self.x_obs_new[i] + self.Apow[self.n_delay - i] @ delta_xN
 
-            #AWR
-            x_awr_old = x_awr_new
-            x_awr_new = A_awr @ x_awr_old + B_awr @ osqp_result.astype(np.float64)
-            y_awr = C_awr @ x_awr_new + D_awr @ osqp_result.astype(np.float64)
-        #Plant
-        x_sim_old = x_sim_new
-        x_sim_new = Ap @ x_sim_old + Bp @ u_sim[:, k:k+1]
-    u_sim = np.transpose(u_sim)
-    y_sim = np.transpose(y_sim)
-    return y_sim, u_sim
+    def update_obs_state(self,k):
+        self.xd_obs_old = self.xd_obs_new
+        self.x_obs_old = self.x_obs_new[:self.n_delay][:][:]
+
+    def update_q_limits(self,k):
+        ####
+        self.q = self.q_mat @ np.vstack((self.x_obs_new[0], self.xd_obs_new))
+        if self.dtype == np.float32:
+
+            self.l_constr = np.vstack((
+                np.maximum(-self.u_max - self.SOFB_setp.astype(self.dtype), -self.u_rate + self.y_awr.astype(self.dtype)),
+                -self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype)
+            ))
+            self.u_constr = np.vstack((
+                np.minimum(self.u_max - self.SOFB_setp.astype(self.dtype), self.u_rate + self.y_awr.astype(self.dtype)),
+                self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype)
+            ))
+        else:
+            self.l_constr = np.vstack((
+                np.maximum(-self.u_max - self.SOFB_setp.astype(self.dtype), -self.u_rate + self.y_awr.astype(self.dtype)),
+                -self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype) - self.xd_obs_new.astype(self.dtype)
+            ))
+            self.u_constr = np.vstack((
+                np.minimum(self.u_max - self.SOFB_setp.astype(self.dtype), self.u_rate + self.y_awr.astype(self.dtype)),
+                self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype) - self.xd_obs_new.astype(self.dtype)
+            ))
+    
+    def solve_update_awr(self,k):
+        self.osqp_solver.update(q=self.q, l=self.l_constr, u=self.u_constr)
+        result = self.osqp_solver.solve()
+        osqp_result = result.x[:self.nu_obs][:, np.newaxis]
+        assert result.info.status_val in [1, 2], "OSQP solver did not find an optimal solution."
+        if self.hil_mode == True:
+            osqp_result = np.round(osqp_result * 1000000,0) * 0.000001
+        self.u_sim[self.id_to_cm, k] = osqp_result.flatten()
+
+        self.x_awr = self.A_awr @ self.x_awr + self.B_awr @ osqp_result.astype(np.float64)
+        self.y_awr = self.C_awr @ self.x_awr + self.D_awr @ osqp_result.astype(np.float64)
+
+    def update_plant_state(self,k):
+        self.x_sim = self.Ap @ self.x_sim + self.Bp @ self.u_sim[:, k:k+1]
+
+
+    def sim_mpc_OSQP(self):
+        
+        self.setupOSQP(False, False, False, 20, 20)
+
+        for k in range(self.n_samples):
+            #Measurements
+            if k % 100 == 0:
+                print(f"Simulation progress: {k/self.n_samples*100:.2f}%")
+
+            self.update_y_sim(k)
+            if k >= self.n_delay:
+                self.update_y_meas(k)
+                self.calc_obs_state(k)
+                self.update_obs_measurement(k)
+                self.update_obs_state(k)
+                self.update_q_limits(k)
+                self.solve_update_awr(k)
+            self.update_plant_state(k)
+
+        self.u_sim = np.transpose(self.u_sim)
+        self.y_sim = np.transpose(self.y_sim)
+
+        return self.y_sim, self.u_sim
+
+

@@ -157,8 +157,7 @@ SOFB_setp = np.where(SOFB_setp > u_max, u_max, SOFB_setp)
 SOFB_setp = np.where(SOFB_setp < -u_max, -u_max, SOFB_setp)
 
 
-#Up to here correct implementation
-y_sim ,u_sim = simOSQP.sim_mpc_OSQP(
+mpc_osqp = simOSQP.MpcOsqp(
     n_samples, n_delay, doff,
     Ap, Bp, Cp, 
     Ao, Bo, Co, Ad, Cd, Lx8_obs, Lxd_obs,
@@ -166,8 +165,22 @@ y_sim ,u_sim = simOSQP.sim_mpc_OSQP(
     u_max, u_rate,
     id_to_bpm, id_to_cm,
     mat_data['A'], mat_data['B'], mat_data['C'], mat_data['D'],
-    SOFB_setp,False
-)
+    SOFB_setp,False)
+
+y_sim ,u_sim = mpc_osqp.sim_mpc_OSQP()
+
+
+# Up to here correct implementation
+# y_sim ,u_sim = simOSQP.sim_mpc_OSQP(
+#     n_samples, n_delay, doff,
+#     Ap, Bp, Cp, 
+#     Ao, Bo, Co, Ad, Cd, Lx8_obs, Lxd_obs,
+#     J_mpc, q_mat, y_max,
+#     u_max, u_rate,
+#     id_to_bpm, id_to_cm,
+#     mat_data['A'], mat_data['B'], mat_data['C'], mat_data['D'],
+#     SOFB_setp,False
+# )
 
 
 
