@@ -3,7 +3,7 @@ import numpy as np
 import scipy.sparse as sparse
 
 
-class MpcOsqp:
+class Mpc:
     def __init__(
         self, n_samples, n_delay, dist,
         Ap, Bp, Cp,
@@ -12,10 +12,12 @@ class MpcOsqp:
         u_max, u_rate,
         id_to_bpm, id_to_cm,
         A_awr, B_awr, C_awr, D_awr,
-        SOFB_setp,
+        SOFB_setp,beta_FGM,
         ol_mode = False, dtype = np.float64, hil_mode = True):
 
         #Initialise solver parameters
+        self.MAX_ITER  = 20
+        self.beta_fgm = beta_FGM
         self.n_samples = n_samples
         self.n_delay = n_delay
         self.dist = dist
@@ -30,6 +32,7 @@ class MpcOsqp:
         self.Cd = Cd.astype(dtype)
         self.LxN_obs = LxN_obs.astype(dtype)
         self.Lxd_obs = Lxd_obs.astype(dtype)
+        self.J_FGM = J_MPC.astype(dtype)
         self.J = sparse.csc_matrix(J_MPC, dtype=dtype)
         self.u_max = u_max.astype(dtype)
         self.u_rate = u_rate.astype(dtype)
@@ -95,20 +98,21 @@ class MpcOsqp:
             y_max - self.y_mat @ self.x_obs_new[0]
         ))
 
+        #Variables for FGM
+        self.z_new = np.zeros((self.nu_obs, 1), dtype=dtype)   
+
 
     #Initialises OSQP solver
     def setupOSQP(self, verbose,
         polish,
-        adaptive_rho,
-        MAX_ITER,
-        check_termination):
+        adaptive_rho):
         
         settings = {
             'verbose': verbose,
             'polish': polish,
             'adaptive_rho': adaptive_rho,
-            'max_iter': MAX_ITER,
-            'check_termination': check_termination
+            'max_iter': self.MAX_ITER,
+            'check_termination': self.MAX_ITER
         }
 
         self.osqp_solver = osqp.OSQP()
@@ -152,28 +156,33 @@ class MpcOsqp:
     def update_q_limits(self,k):
         ####
         self.q = self.q_mat @ np.vstack((self.x_obs_new[0], self.xd_obs_new))
-        if self.dtype == np.float32:
-
-            self.l_constr = np.vstack((
-                np.maximum(-self.u_max - self.SOFB_setp.astype(self.dtype), -self.u_rate + self.y_awr.astype(self.dtype)),
-                -self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype)
-            ))
-            self.u_constr = np.vstack((
-                np.minimum(self.u_max - self.SOFB_setp.astype(self.dtype), self.u_rate + self.y_awr.astype(self.dtype)),
-                self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype)
-            ))
+        if self.use_FGM:
+            self.l_constr = np.maximum(-self.u_max - self.SOFB_setp, -self.u_rate + self.y_awr)
+            self.u_constr = np.minimum(self.u_max - self.SOFB_setp, self.u_rate + self.y_awr)
         else:
-            self.l_constr = np.vstack((
-                np.maximum(-self.u_max - self.SOFB_setp.astype(self.dtype), -self.u_rate + self.y_awr.astype(self.dtype)),
-                -self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype) - self.xd_obs_new.astype(self.dtype)
-            ))
-            self.u_constr = np.vstack((
-                np.minimum(self.u_max - self.SOFB_setp.astype(self.dtype), self.u_rate + self.y_awr.astype(self.dtype)),
-                self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype) - self.xd_obs_new.astype(self.dtype)
-            ))
+        
+            if self.dtype == np.float32:
+
+                self.l_constr = np.vstack((
+                    np.maximum(-self.u_max - self.SOFB_setp.astype(self.dtype), -self.u_rate + self.y_awr.astype(self.dtype)),
+                    -self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype)
+                ))
+                self.u_constr = np.vstack((
+                    np.minimum(self.u_max - self.SOFB_setp.astype(self.dtype), self.u_rate + self.y_awr.astype(self.dtype)),
+                    self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype)
+                ))
+            else:
+                self.l_constr = np.vstack((
+                    np.maximum(-self.u_max - self.SOFB_setp.astype(self.dtype), -self.u_rate + self.y_awr.astype(self.dtype)),
+                    -self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype) - self.xd_obs_new.astype(self.dtype)
+                ))
+                self.u_constr = np.vstack((
+                    np.minimum(self.u_max - self.SOFB_setp.astype(self.dtype), self.u_rate + self.y_awr.astype(self.dtype)),
+                    self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype) - self.xd_obs_new.astype(self.dtype)
+                ))
 
     #Solves the QP problem and updates the AWR state
-    def solve_update_awr(self,k):
+    def solveOSQP_update_awr(self,k):
         self.osqp_solver.update(q=self.q, l=self.l_constr, u=self.u_constr)
         result = self.osqp_solver.solve()
         osqp_result = result.x[:self.nu_obs][:, np.newaxis]
@@ -189,9 +198,26 @@ class MpcOsqp:
         self.x_sim = self.Ap @ self.x_sim + self.Bp @ self.u_sim[:, k:k+1]
 
 
-    def sim_mpc_OSQP(self):
-        
-        self.setupOSQP(False, False, False, 20, 20)
+
+    def solveFGM_update_awr(self, k):
+
+        out_global = self.u_sim[self.id_to_cm, k-1][:, np.newaxis]
+        for i in range(self.MAX_ITER):
+            self.z_old = self.z_new
+            t = self.J_FGM @ out_global - self.q
+            self.z_new = np.maximum(self.l_constr, np.minimum(self.u_constr, t))
+            out_global = (1+self.beta_fgm) * self.z_new - self.beta_fgm * self.z_old
+        fgm_result = self.z_new
+
+        self.u_sim[self.id_to_cm, k] = fgm_result.flatten()
+
+        self.x_awr = self.A_awr @ self.x_awr + self.B_awr @ fgm_result.astype(np.float64)
+        self.y_awr = self.C_awr @ self.x_awr + self.D_awr @ fgm_result.astype(np.float64)
+
+
+    def sim_mpc(self, use_fgm):
+        self.use_FGM = use_fgm
+        self.setupOSQP(False, False, False)
 
         for k in range(self.n_samples):
             #Measurements
@@ -205,7 +231,10 @@ class MpcOsqp:
                 self.update_obs_measurement(k)
                 self.update_obs_state(k)
                 self.update_q_limits(k)
-                self.solve_update_awr(k)
+                if use_fgm:
+                    self.solveFGM_update_awr(k)
+                else:
+                    self.solveOSQP_update_awr(k)
             self.update_plant_state(k)
 
         self.u_sim = np.transpose(self.u_sim)

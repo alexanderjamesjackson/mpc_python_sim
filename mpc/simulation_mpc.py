@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.sparse as sparse
 from scipy.io import loadmat
-import sim_mpc_OSQP as simOSQP
+import sim_mpc as sim
 import diamond_I_configuration_v5 as DI
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -18,6 +18,7 @@ dirs = ['horizontal','vertical']
 pick_direction = dirs[pick_dir]
 do_step = True
 sim_IMC = False
+use_FGM = True
 
 #Hardlimits
 fname_correctors = '../data/corrector_data.csv'
@@ -43,15 +44,14 @@ RMx = RMorigx[np.ix_(id_to_bpm_x, id_to_cm_x)]
 RMy = RMorigy[np.ix_(id_to_bpm_y, id_to_cm_y)]
 
 #Observer and Regulator
-n_delay = 9
+n_delay = 8
 
-if n_delay == 8:
-    system_path = '../data/mpc_data_02092022_nd8.mat'
-    mat_data = loadmat(system_path)
+fname = f'../data/mpc_data_13092022_nd{n_delay}.mat'
 
-if n_delay == 9:
-    system_path = '../data/mpc_data_13092022_nd9.mat'
-    mat_data = loadmat(system_path)
+
+mat_data = loadmat(fname)
+
+
 
 
 Fs = 10000
@@ -126,6 +126,18 @@ S_sp_pinv_u = S_sp_pinv[nx:,:]
 q_mat_x0 = np.transpose(Bo) @ P_mpc @ Ao
 q_mat_xd = (np.hstack((Bo.T @ P_mpc, R_mpc)) @ np.vstack((S_sp_pinv_x, S_sp_pinv_u)) @ Cd)
 q_mat = np.hstack((q_mat_x0, q_mat_xd))
+
+#Set up FGM
+beta_fgm = 0
+
+if use_FGM:
+    eigmax = np.max(np.linalg.eigvals(J_mpc))
+    eigmin = np.min(np.linalg.eigvals(J_mpc))   
+    J_mpc = np.eye(J_mpc.shape[0]) - J_mpc / eigmax
+    beta_fgm = (np.sqrt(eigmax) - np.sqrt(eigmin)) / (np.sqrt(eigmax) + np.sqrt(eigmin))
+    q_mat = np.hstack((q_mat_x0, q_mat_xd)) / eigmax
+
+
 #Rate limiter on VME processors
 if pick_direction == 'vertical':
     mat_data.update(loadmat('../data/awrSSy.mat'))
@@ -170,7 +182,7 @@ SOFB_setp = np.where(SOFB_setp > u_max, u_max, SOFB_setp)
 SOFB_setp = np.where(SOFB_setp < -u_max, -u_max, SOFB_setp)
 
 
-mpc_osqp = simOSQP.MpcOsqp(
+mpc_osqp = sim.Mpc(
     n_samples, n_delay, doff,
     Ap, Bp, Cp, 
     Ao, Bo, Co, Ad, Cd, Lx8_obs, Lxd_obs,
@@ -178,17 +190,18 @@ mpc_osqp = simOSQP.MpcOsqp(
     u_max, u_rate,
     id_to_bpm, id_to_cm,
     mat_data['A'], mat_data['B'], mat_data['C'], mat_data['D'],
-    SOFB_setp,False)
+    SOFB_setp, beta_fgm)
 
-y_sim ,u_sim, x0_obs, xd_obs = mpc_osqp.sim_mpc_OSQP()
-print(u_sim.shape)
+
+
+
+y_sim ,u_sim, x0_obs, xd_obs = mpc_osqp.sim_mpc(use_FGM)
+
 x0_obs = x0_obs.squeeze()
 xd_obs = xd_obs.squeeze()
-print(x0_obs.shape)
-print(xd_obs.shape) 
+
 
 x_data = np.hstack((x0_obs, xd_obs))
-print(x_data.shape)
 
 #Concatenate x_data and u_data along the second axis
 combined_data = np.hstack((x_data, u_sim))
