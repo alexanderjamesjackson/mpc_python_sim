@@ -2,8 +2,4 @@
 /__pycache__
 /mpc/__pycache__
 
-/data/model
-/data/u_test.pt
-/data/u_train.pt
-/data/x_test.pt
-/data/x_train.pt
+/data

@@ -1,15 +1,38 @@
+import torch
+from torch import nn
+from torch.autograd import Function, Variable
+from torch.nn.parameter import Parameter
+import torch.optim as optim
+
 import numpy as np
+import numpy.random as npr
+
+import os
+import matplotlib.pyplot as plt
+
+import pickle as pkl
 import scipy.sparse as sparse
 from scipy.io import loadmat
 import sim_mpc as sim
 import diamond_I_configuration_v5 as DI
 import pandas as pd
-import matplotlib.pyplot as plt
 import time
-import torch
-import os
-
 start = time.time()
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+size_file_path = '../data/sizes.pkl'
+with open(size_file_path, 'rb') as f:
+    sizes = pkl.load(f)
+
+n_state = sizes['n_state']
+n_ctrl = sizes['n_ctrl']
+hidden_size = sizes['hidden_size']
+n_sc = sizes['n_sc']
+
+model_path = '../data/model/model.ckpt'
+nnparams = torch.load(model_path)
 
 # options
 fname_RM = '../orms/GoldenBPMResp_DIAD.mat'
@@ -195,13 +218,10 @@ mpc_osqp = sim.Mpc(
 
 
 
-y_sim ,u_sim, x0_obs, xd_obs = mpc_osqp.sim_mpc(use_FGM)
+y_sim ,u_sim, x0_obs, xd_obs = mpc_osqp.sim_nn(n_state, hidden_size, n_ctrl, nnparams, device)
 
-u_sim_act = u_sim[:, id_to_cm]
 
-# Save the simulation results
-
-np.savez('../data/simresults.npz' , y_sim=y_sim, u_sim=u_sim_act, x0_obs=x0_obs, xd_obs=xd_obs)
+np.savez('../data/simresults.npz' , y_sim=y_sim, u_sim=u_sim, x0_obs=x0_obs, xd_obs=xd_obs)
 
 
 # Plotting
@@ -240,6 +260,8 @@ print("Time taken: ", time.time() - start)
 # Adjust layout for better spacing
 plt.tight_layout()
 plt.show()
+
+
 
 
 

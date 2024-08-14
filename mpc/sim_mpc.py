@@ -1,7 +1,8 @@
 import osqp
 import numpy as np
 import scipy.sparse as sparse
-
+import torch.nn as nn
+import torch
 
 class Mpc:
     def __init__(
@@ -138,7 +139,7 @@ class Mpc:
         for i in range(1, self.n_delay + 1):
             self.x_obs_new[i] = self.x_obs_old[i-1]
 
-    def update_obs_measurement(self,k):
+    def update_obs_measurement(self):
         delta_y = self.y_meas - self.Co @ self.x_obs_new[self.n_delay] - self.Cd @ self.xd_obs_new
         delta_xN = self.LxN_obs @ delta_y
         delta_xd = self.Lxd_obs @ delta_y
@@ -153,7 +154,7 @@ class Mpc:
         self.x0_obs[k] = self.x_obs_new[0]
         self.xd_obs[k] = self.xd_obs_new
 
-    def update_q_limits(self,k):
+    def update_q_limits(self):
         ####
         self.q = self.q_mat @ np.vstack((self.x_obs_new[0], self.xd_obs_new))
         if self.use_FGM:
@@ -181,7 +182,8 @@ class Mpc:
                     self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype) - self.xd_obs_new.astype(self.dtype)
                 ))
 
-    #Solves the QP problem and updates the AWR state
+
+    #Solves the problem using OSQP and updates the AWR state
     def solveOSQP_update_awr(self,k):
         self.osqp_solver.update(q=self.q, l=self.l_constr, u=self.u_constr)
         result = self.osqp_solver.solve()
@@ -194,11 +196,12 @@ class Mpc:
         self.x_awr = self.A_awr @ self.x_awr + self.B_awr @ osqp_result.astype(np.float64)
         self.y_awr = self.C_awr @ self.x_awr + self.D_awr @ osqp_result.astype(np.float64)
 
+
     def update_plant_state(self,k):
         self.x_sim = self.Ap @ self.x_sim + self.Bp @ self.u_sim[:, k:k+1]
 
 
-
+    #Solves the problem using FGM and updates the AWR state
     def solveFGM_update_awr(self, k):
 
         out_global = self.u_sim[self.id_to_cm, k-1][:, np.newaxis]
@@ -214,6 +217,7 @@ class Mpc:
         self.x_awr = self.A_awr @ self.x_awr + self.B_awr @ fgm_result.astype(np.float64)
         self.y_awr = self.C_awr @ self.x_awr + self.D_awr @ fgm_result.astype(np.float64)
 
+    #Function to simulate the MPC
 
     def sim_mpc(self, use_fgm):
         self.use_FGM = use_fgm
@@ -228,9 +232,9 @@ class Mpc:
             if k >= self.n_delay:
                 self.update_y_meas(k)
                 self.calc_obs_state(k)
-                self.update_obs_measurement(k)
+                self.update_obs_measurement()
                 self.update_obs_state(k)
-                self.update_q_limits(k)
+                self.update_q_limits()
                 if use_fgm:
                     self.solveFGM_update_awr(k)
                 else:
@@ -239,9 +243,69 @@ class Mpc:
 
         self.u_sim = np.transpose(self.u_sim)
         self.y_sim = np.transpose(self.y_sim)
-        # self.x0_obs = np.transpose(self.x0_obs)
-        # self.xd_obs = np.transpose(self.xd_obs)
+        return self.y_sim, self.u_sim, self.x0_obs, self.xd_obs
+    
 
+    #Function to solve the MPC problem using a neural network controller
+    def solvenn_update_awr(self,k):
+        ##DIMENSION ISSUES
+        x_aug = torch.tensor(np.transpose(np.vstack((self.x_obs_new[0], self.xd_obs_new)))).float().to(self.device)
+        u_nn = self.nn_controller(x_aug).detach().numpy()
+        u_nn = np.transpose(u_nn)
+        #######
+        self.u_sim[self.id_to_cm,k] = u_nn.flatten()
+        self.x_awr = self.A_awr @ self.x_awr + self.B_awr @ u_nn
+        self.y_awr = self.C_awr @ self.x_awr + self.D_awr @ u_nn
+
+
+    #Simulate using a neural network controller
+    def sim_nn(self,n_state,hidden_size,n_ctrl,params,device):
+        self.device = device
+        self.nn_controller = NNController(n_state, hidden_size, n_ctrl)
+        self.nn_controller.load_state_dict(params)
+        self.nn_controller.eval()
+        self.nn_controller.to(torch.device(device))
+
+        for k in range(self.n_samples):
+            #Measurements
+            if k % 100 == 0:
+                print(f"Simulation progress: {k/self.n_samples*100:.2f}%")
+
+            self.update_y_sim(k)
+            if k >= self.n_delay:
+                self.update_y_meas(k)
+                self.calc_obs_state(k)
+                self.update_obs_measurement()
+                self.update_obs_state(k)
+                self.solvenn_update_awr(k)
+            self.update_plant_state(k)
+
+        self.u_sim = np.transpose(self.u_sim)
+        self.y_sim = np.transpose(self.y_sim)
         return self.y_sim, self.u_sim, self.x0_obs, self.xd_obs
 
+
+
+
+
+# Define NN
+class NNController(nn.Module):
+    def __init__(self, n_state, hidden_size, n_ctrl):
+        super(NNController, self).__init__()
+        self.hidden_size = hidden_size
+
+        # Initialize weights and biases for all layers
+        self.fc1 = nn.Linear(n_state, hidden_size)
+        self.act1 = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.act2 = nn.ReLU()
+        self.fc3 = nn.Linear(hidden_size, n_ctrl)
+
+    def forward(self, x):  # x: (n_batch, n_state)
+        out = self.fc1(x)
+        out = self.act1(out)
+        out = self.fc2(out)
+        out = self.act2(out)
+        out = self.fc3(out)
+        return out
 

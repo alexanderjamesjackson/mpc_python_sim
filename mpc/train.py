@@ -8,6 +8,9 @@ import numpy as np
 import numpy.random as npr
 
 import os
+import matplotlib.pyplot as plt
+
+import pickle as pkl
 
 # cuda
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -44,6 +47,17 @@ num_epochs = 500
 
 n_state, n_ctrl = x_train.size(1), u_train.size(1)
 n_sc = n_state + n_ctrl
+
+sizes={
+    'n_state': n_state,
+    'n_ctrl': n_ctrl,
+    'hidden_size': hidden_size,
+    'n_sc': n_sc
+}
+
+fname = os.path.join(data_dir, 'sizes.pkl')
+with open(fname, 'wb') as f:
+    pkl.dump(sizes, f)
 
 class NNController(nn.Module):
     def __init__(self, n_state, hidden_size, n_ctrl):
@@ -93,6 +107,7 @@ total_step = len(train_loader)
 for epoch in range(num_epochs):  # episode size
     for i, (x_train, u_train) in enumerate(train_loader):
         # Move tensors to the configured device
+
         x_train = x_train.to(device)
         u_train = u_train.to(device)
 
@@ -114,11 +129,11 @@ for epoch in range(num_epochs):  # episode size
     epoch_losses.append(loss.item())
     
 
-# plt.plot(epochs, epoch_losses)
-# plt.xlabel('Epoch')
-# plt.ylabel('Loss')
-# plt.title('Training Loss')
-# plt.show()
+plt.plot(epochs, epoch_losses)
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.title('Training Loss')
+plt.show()
 
 # Test the model
 with torch.no_grad():
