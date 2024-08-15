@@ -24,8 +24,8 @@ np.random.shuffle(combined_data)
 
 #Split the combined data back into x and u components
 
-x_data_shuffled = combined_data[:, :330]
-u_data_shuffled = combined_data[:, 330:]
+x_data_shuffled = combined_data[:, :x_data.shape[1]]
+u_data_shuffled = combined_data[:, x_data.shape[1]:]
 
 #Split the shuffled data into training and testing sets
 train_size = int(0.8 * combined_data.shape[0])

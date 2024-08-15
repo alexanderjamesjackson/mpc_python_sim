@@ -41,7 +41,7 @@ dirs = ['horizontal','vertical']
 pick_direction = dirs[pick_dir]
 do_step = True
 sim_IMC = False
-use_FGM = True
+use_FGM = False
 
 #Hardlimits
 fname_correctors = '../data/corrector_data.csv'
@@ -63,6 +63,11 @@ TOT_BPM = np.size(RMorigx, 0)
 TOT_CM = np.size(RMorigx, 1)
 square_config = True
 id_to_bpm_x, id_to_cm_x, id_to_bpm_y, id_to_cm_y = DI.diamond_I_configuration_v5(RMorigx, RMorigy, square_config)
+id_to_bpm_x = np.array([0,1])
+id_to_cm_x = np.array([0,1])
+id_to_bpm_y = np.array([0,1])
+id_to_cm_y = np.array([0,1])
+
 RMx = RMorigx[np.ix_(id_to_bpm_x, id_to_cm_x)]
 RMy = RMorigy[np.ix_(id_to_bpm_y, id_to_cm_y)]
 
@@ -88,20 +93,21 @@ if pick_direction == 'vertical':
     RM = RMy
     aI_Hz = 700
     #Observer
-    Ao = mat_data['Ao_y']
-    Bo = mat_data['Bo_y']
-    Co = mat_data['Co_y']
-    Ad = mat_data['Ad_y']
-    Cd = mat_data['Cd_y']
+    Ao = mat_data['Ao_y'][:2,:2]
+    print(Ao.shape)
+    Bo = mat_data['Bo_y'][:2,:2]
+    Co = mat_data['Co_y'][:2,:2]
+    Ad = mat_data['Ad_y'][:2,:2]
+    Cd = mat_data['Cd_y'][:2,:2]
     #Plant with all BPMs and CMs
-    Ap = mat_data['Ap_y']
-    Bp = mat_data['Bp_y']
-    Cp = mat_data['Cp_y']
-    Kfd = mat_data['Kfd_y'] #Observer gain for disturbance
-    Kfx = mat_data['Kfx_y'] #Observer gain for state
-    P_mpc = mat_data['P_y'] #Terminal cost
-    Q_mpc = mat_data['Qlqr_y'] #State weighting
-    R_mpc = mat_data['Rlqr_y'] #Input weighting
+    Ap = mat_data['Ap_y'][:2,:2]
+    Bp = mat_data['Bp_y'][:2,:2]
+    Cp = mat_data['Cp_y'][:2,:2]
+    Kfd = mat_data['Kfd_y'][:2,:2] #Observer gain for disturbance
+    Kfx = mat_data['Kfx_y'][:2,:2] #Observer gain for state
+    P_mpc = mat_data['P_y'][:2,:2] #Terminal cost
+    Q_mpc = mat_data['Qlqr_y'][:2,:2] #State weighting
+    R_mpc = mat_data['Rlqr_y'][:2,:2] #Input weighting
     #SOFB
 
 else:
@@ -177,15 +183,15 @@ if do_step:
 else:
     print("no data at this time")
 
-imode = 100
-n_samples = 30
+imode = 1
+n_samples = 6000
 
 if pick_direction == 'vertical':
     UR, SR, VR = np.linalg.svd(RMy)
 else:
     UR, SR, VR = np.linalg.svd(RMx)
 
-mag_u = 10*1000
+mag_u = 10
 tmp = UR[:, imode - 1] * SR[imode - 1] * mag_u
 doff_tmp = np.zeros((TOT_BPM, 1))
 doff_tmp[id_to_bpm] = tmp[:, np.newaxis]
@@ -206,19 +212,19 @@ SOFB_setp = np.where(SOFB_setp < -u_max, -u_max, SOFB_setp)
 
 
 mpc = sim.Mpc(
-    n_samples, n_delay, doff,
+    n_samples, n_delay, doff[:2,:],
     Ap, Bp, Cp, 
     Ao, Bo, Co, Ad, Cd, Lx8_obs, Lxd_obs,
     J_mpc, q_mat, y_max,
     u_max, u_rate,
     id_to_bpm, id_to_cm,
-    mat_data['A'], mat_data['B'], mat_data['C'], mat_data['D'],
+    mat_data['A'][:2,:2], mat_data['B'][:2,:2], mat_data['C'][:2,:2], mat_data['D'][:2,:2],
     SOFB_setp, beta_fgm)
 
 
 
-# y_sim ,u_sim, x0_obs, xd_obs = mpc.sim_mpc(use_FGM)
-y_sim ,u_sim, x0_obs, xd_obs = mpc.sim_nn(n_state, hidden_size, n_ctrl, nnparams, device)
+y_sim ,u_sim, x0_obs, xd_obs = mpc.sim_mpc(use_FGM)
+# y_sim ,u_sim, x0_obs, xd_obs = mpc.sim_nn(n_state, hidden_size, n_ctrl, nnparams, device)
 
 
 np.savez('../data/simresults.npz' , y_sim=y_sim, u_sim=u_sim, x0_obs=x0_obs, xd_obs=xd_obs)
