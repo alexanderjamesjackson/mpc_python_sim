@@ -40,6 +40,7 @@ test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
 
 
 hidden_size = 32
+#Change rate of learning
 learning_rate = 1e-4
 num_epochs = 500
 
@@ -129,11 +130,7 @@ for epoch in range(num_epochs):  # episode size
     epoch_losses.append(loss.item())
     
 
-plt.plot(epochs, epoch_losses)
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.title('Training Loss')
-plt.show()
+
 
 # Test the model
 with torch.no_grad():
@@ -148,3 +145,15 @@ with torch.no_grad():
 
 data_dir = '../data/model'
 torch.save(model.state_dict(), os.path.join(data_dir, 'model.ckpt'))
+
+epochs = np.array(epochs)
+epoch_losses = np.array(epoch_losses)
+
+np.savez('../data/model/modelloss' , epochs = epochs, epoch_losses = epoch_losses)
+
+
+plt.plot(epochs, epoch_losses)
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.title('Training Loss')
+plt.show()

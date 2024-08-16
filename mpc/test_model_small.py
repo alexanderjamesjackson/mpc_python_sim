@@ -41,7 +41,7 @@ dirs = ['horizontal','vertical']
 pick_direction = dirs[pick_dir]
 do_step = True
 sim_IMC = False
-use_FGM = False
+use_FGM = True
 
 #Hardlimits
 fname_correctors = '../data/corrector_data.csv'
@@ -63,13 +63,20 @@ TOT_BPM = np.size(RMorigx, 0)
 TOT_CM = np.size(RMorigx, 1)
 square_config = True
 id_to_bpm_x, id_to_cm_x, id_to_bpm_y, id_to_cm_y = DI.diamond_I_configuration_v5(RMorigx, RMorigy, square_config)
-id_to_bpm_x = np.array([0,1])
-id_to_cm_x = np.array([0,1])
-id_to_bpm_y = np.array([0,1])
-id_to_cm_y = np.array([0,1])
+
+#first n_include BPMs and CMs active for testing
+n_include = 16
+
+
+id_to_bpm_x = np.linspace(0, n_include-1, n_include).astype(int)
+id_to_cm_x = np.linspace(0, n_include-1, n_include).astype(int)
+id_to_bpm_y = np.linspace(0, n_include-1, n_include).astype(int)
+id_to_cm_y = np.linspace(0, n_include-1, n_include).astype(int)
 
 RMx = RMorigx[np.ix_(id_to_bpm_x, id_to_cm_x)]
 RMy = RMorigy[np.ix_(id_to_bpm_y, id_to_cm_y)]
+
+
 
 #Observer and Regulator
 n_delay = 8
@@ -93,21 +100,20 @@ if pick_direction == 'vertical':
     RM = RMy
     aI_Hz = 700
     #Observer
-    Ao = mat_data['Ao_y'][:2,:2]
-    print(Ao.shape)
-    Bo = mat_data['Bo_y'][:2,:2]
-    Co = mat_data['Co_y'][:2,:2]
-    Ad = mat_data['Ad_y'][:2,:2]
-    Cd = mat_data['Cd_y'][:2,:2]
+    Ao = mat_data['Ao_y'][:n_include,:n_include]
+    Bo = mat_data['Bo_y'][:n_include,:n_include]
+    Co = mat_data['Co_y'][:n_include,:n_include]
+    Ad = mat_data['Ad_y'][:n_include,:n_include]
+    Cd = mat_data['Cd_y'][:n_include,:n_include]
     #Plant with all BPMs and CMs
-    Ap = mat_data['Ap_y'][:2,:2]
-    Bp = mat_data['Bp_y'][:2,:2]
-    Cp = mat_data['Cp_y'][:2,:2]
-    Kfd = mat_data['Kfd_y'][:2,:2] #Observer gain for disturbance
-    Kfx = mat_data['Kfx_y'][:2,:2] #Observer gain for state
-    P_mpc = mat_data['P_y'][:2,:2] #Terminal cost
-    Q_mpc = mat_data['Qlqr_y'][:2,:2] #State weighting
-    R_mpc = mat_data['Rlqr_y'][:2,:2] #Input weighting
+    Ap = mat_data['Ap_y'][:n_include,:n_include]
+    Bp = mat_data['Bp_y'][:n_include,:n_include]
+    Cp = mat_data['Cp_y'][:n_include,:n_include]
+    Kfd = mat_data['Kfd_y'][:n_include,:n_include] #Observer gain for disturbance
+    Kfx = mat_data['Kfx_y'][:n_include,:n_include] #Observer gain for state
+    P_mpc = mat_data['P_y'][:n_include,:n_include] #Terminal cost
+    Q_mpc = mat_data['Qlqr_y'][:n_include,:n_include] #State weighting
+    R_mpc = mat_data['Rlqr_y'][:n_include,:n_include] #Input weighting
     #SOFB
 
 else:
@@ -183,7 +189,8 @@ if do_step:
 else:
     print("no data at this time")
 
-imode = 1
+# imode = int(n_include/2)
+imode = 8
 n_samples = 6000
 
 if pick_direction == 'vertical':
@@ -212,22 +219,44 @@ SOFB_setp = np.where(SOFB_setp < -u_max, -u_max, SOFB_setp)
 
 
 mpc = sim.Mpc(
-    n_samples, n_delay, doff[:2,:],
+    n_samples, n_delay, doff[:n_include, :],
     Ap, Bp, Cp, 
     Ao, Bo, Co, Ad, Cd, Lx8_obs, Lxd_obs,
     J_mpc, q_mat, y_max,
     u_max, u_rate,
     id_to_bpm, id_to_cm,
-    mat_data['A'][:2,:2], mat_data['B'][:2,:2], mat_data['C'][:2,:2], mat_data['D'][:2,:2],
+    mat_data['A'][:n_include,:n_include], mat_data['B'][:n_include,:n_include], mat_data['C'][:n_include,:n_include], mat_data['D'][:n_include,:n_include],
     SOFB_setp, beta_fgm)
 
 
 
-y_sim ,u_sim, x0_obs, xd_obs = mpc.sim_mpc(use_FGM)
-# y_sim ,u_sim, x0_obs, xd_obs = mpc.sim_nn(n_state, hidden_size, n_ctrl, nnparams, device)
+y_sim_fgm ,u_sim_fgm, x0_obs_fgm, xd_obs_fgm = mpc.sim_mpc(use_FGM)
+np.savez('../data/simresults.npz' , y_sim=y_sim_fgm, u_sim=u_sim_fgm, x0_obs=x0_obs_fgm, xd_obs=xd_obs_fgm)
+
+compare = True
+
+if compare:
+    mpc = sim.Mpc(
+        n_samples, n_delay, doff[:n_include,:],
+        Ap, Bp, Cp, 
+        Ao, Bo, Co, Ad, Cd, Lx8_obs, Lxd_obs,
+        J_mpc, q_mat, y_max,
+        u_max, u_rate,
+        id_to_bpm, id_to_cm,
+        mat_data['A'][:n_include,:n_include], mat_data['B'][:n_include,:n_include], mat_data['C'][:n_include,:n_include], mat_data['D'][:n_include,:n_include],
+        SOFB_setp, beta_fgm)
+    y_sim_nn ,u_sim_nn, x0_obs_nn, xd_obs_nn = mpc.sim_nn(n_state, hidden_size, n_ctrl, nnparams, device)
+
+    y_err = (y_sim_fgm - y_sim_nn) 
+    u_err = (u_sim_fgm - u_sim_nn) 
 
 
-np.savez('../data/simresults.npz' , y_sim=y_sim, u_sim=u_sim, x0_obs=x0_obs, xd_obs=xd_obs)
+
+
+
+#Unpack Loss Data
+
+loss_data = np.load('../data/model/modelloss.npz')
 
 
 # Plotting
@@ -235,7 +264,7 @@ np.savez('../data/simresults.npz' , y_sim=y_sim, u_sim=u_sim, x0_obs=x0_obs, xd_
 
 scale_u = 0.001
 
-fig, axs = plt.subplots(2, 4, figsize=(15, 8))
+fig, axs = plt.subplots(2, 5, figsize=(15, 8))
 
 # Subplot 1: Disturbance
 axs[0, 0].plot(doff[id_to_bpm, :].T)
@@ -246,24 +275,50 @@ axs[0, 1].plot((UR.T @ doff[id_to_bpm, :]).T)
 axs[0, 1].set_title('Disturbance Mode Space')
 
 # Subplot 3: Input
-axs[0, 2].plot(u_sim[:, id_to_cm] * scale_u)
+axs[0, 2].plot(u_sim_fgm[:, id_to_cm] * scale_u, linestyle='-')  # solid line for u_sim_fgm
+if compare:
+    axs[0, 2].plot(u_sim_nn[:, id_to_cm] * scale_u, linestyle='--')  # dashed line for u_sim_nn
 axs[0, 2].set_title('Input')
 
-# Subplot 4: Input Mode Space
-axs[0, 3].plot(scale_u * u_sim[:, id_to_cm] @ VR)
-axs[0, 3].set_title('Input Mode Space')
+# # Subplot 4: % Error in Input
+if compare:
+    axs[0, 3].plot(u_err[:, id_to_cm] * scale_u, linestyle='-')  # solid line for u_sim_fgm
+    axs[0, 3].set_title('Input Error')
 
-# Subplot 5: Output
-axs[1, 0].plot(y_sim[:, id_to_bpm])
-axs[1, 0].set_title('Output')
+# # Subplot 5: Input Mode Space
+axs[1, 0].plot(scale_u * u_sim_fgm[:, id_to_cm] @ VR, linestyle='-')  # solid line for u_sim_fgm
+if compare:
+    axs[1, 0].plot(scale_u * u_sim_nn[:, id_to_cm] @ VR, linestyle='--')  # dashed line for u_sim_nn
+axs[1, 0].set_title('Input Mode Space')
 
-# Subplot 6: Output Mode Space
-axs[1, 1].plot(y_sim[:, id_to_bpm] @ UR)
-axs[1, 1].set_title('Output Mode Space')
+# Subplot 6: Output
+axs[1, 1].plot(y_sim_fgm[:, id_to_bpm], linestyle='-')  # solid line for y_sim_fgm
+if compare:
+    axs[1, 1].plot(y_sim_nn[:, id_to_bpm], linestyle='--')  # dashed line for y_sim_nn
+axs[1, 1].set_title('Output')
+
+# Subplot 7: Output Mode Space
+axs[1, 2].plot(y_sim_fgm[:, id_to_bpm] @ UR, linestyle='-')  # solid line for y_sim_fgm
+if compare:
+    axs[1, 2].plot(y_sim_nn[:, id_to_bpm] @ UR, linestyle='--')  # dashed line for y_sim_nn
+axs[1, 2].set_title('Output Mode Space')
+
+
+# Subplot 8: % Error in Output
+if compare:
+    axs[1, 3].plot(y_err[:, id_to_bpm], linestyle='-')  # solid line for y_sim_fgm
+axs[1, 3].set_title('Output Error')
+
+#Suplot 9 : Loss
+if compare:
+    axs[1, 4].plot(loss_data['epochs'], loss_data['epoch_losses'])
+    axs[1, 4].set_xlabel('Epoch')
+    axs[1, 4].set_ylabel('Loss')
+    axs[1, 4].set_title('Training Loss')
 
 print("Time taken: ", time.time() - start)
 
-# Adjust layout for better spacing
+# # Adjust layout for better spacing
 plt.tight_layout()
 plt.show()
 
