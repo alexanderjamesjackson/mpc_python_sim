@@ -243,6 +243,8 @@ class Mpc:
 
         self.u_sim = np.transpose(self.u_sim)
         self.y_sim = np.transpose(self.y_sim)
+        self.x0_obs = self.x0_obs.reshape((self.n_samples, self.nx_obs))
+        self.xd_obs = self.xd_obs.reshape((self.n_samples, self.nx_obs))
         return self.y_sim, self.u_sim, self.x0_obs, self.xd_obs
     
 
@@ -282,6 +284,8 @@ class Mpc:
 
         self.u_sim = np.transpose(self.u_sim)
         self.y_sim = np.transpose(self.y_sim)
+        self.x0_obs = self.x0_obs.reshape((self.n_samples, self.nx_obs))
+        self.xd_obs = self.xd_obs.reshape((self.n_samples, self.nx_obs))
         return self.y_sim, self.u_sim, self.x0_obs, self.xd_obs
 
 
