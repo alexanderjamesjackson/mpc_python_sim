@@ -17,6 +17,27 @@ import sim_mpc as sim
 import diamond_I_configuration_v5 as DI
 import pandas as pd
 import time
+
+#Helper function to generate random modes
+
+def randModes(seed, RM, id_to_bpm, TOT_BPM):
+    UR, SR, VR = np.linalg.svd(RM)
+    weighted_combination = np.zeros_like(UR[:, 0])  
+    doff_tmp = np.zeros((TOT_BPM, 1))
+    for i in range(len(SR)):
+        pert = 1 + np.random.normal(0, 0.01, 1)
+        weighted_combination += SR[i]*pert * UR[:, i] * 10
+    print(weighted_combination.shape)
+    print(doff_tmp[id_to_bpm].shape)
+    doff_tmp[id_to_bpm] = weighted_combination[:, np.newaxis]
+    doff = doff_tmp * np.ones((1,n_samples))
+
+    return doff
+
+
+
+
+
 start = time.time()
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -66,7 +87,7 @@ id_to_bpm_x, id_to_cm_x, id_to_bpm_y, id_to_cm_y = DI.diamond_I_configuration_v5
 
 #first n_include BPMs and CMs active for testing
 
-n_include = 8
+n_include = 2
 
 
 id_to_bpm_x = id_to_bpm_x[:n_include]
@@ -192,11 +213,12 @@ else:
 n_samples = 6000
 
 #Simulates multiple modes of disturbance to get training data
-train = False
+#Toggles for training mode and comparison mode
+train = True
+compare = False
+trainseeds = np.linspace(1, 5, 5)
 
-trainmodes = [1,2,3,4,5,6]
-
-n_tests = len(trainmodes)
+n_tests = len(trainseeds)
 
 u_sim_train = np.zeros((n_samples * n_tests, n_include))
 xd_obs_train = np.zeros((n_samples * n_tests, n_include))
@@ -206,19 +228,11 @@ y_sim_train = np.zeros((n_samples * n_tests , n_include))
 
 if train:
 
-    for imode in trainmodes:
+    for seed in trainseeds:
         k = 1
 
-        if pick_direction == 'vertical':
-            UR, SR, VR = np.linalg.svd(RMy)
-        else:
-            UR, SR, VR = np.linalg.svd(RMx)
+        doff = randModes(seed, RM, id_to_bpm, TOT_BPM)
 
-        mag_u = 10
-        tmp = UR[:, imode - 1] * SR[imode - 1] * mag_u
-        doff_tmp = np.zeros((TOT_BPM, 1))
-        doff_tmp[id_to_bpm] = tmp[:, np.newaxis]
-        doff = doff_tmp * np.ones((1,n_samples))
         don = doff
         y_max = np.ones((id_to_bpm.size, 1)) * 850
         #Simulation
@@ -254,17 +268,7 @@ if train:
         k+=1
 
 else:
-    if pick_direction == 'vertical':
-        UR, SR, VR = np.linalg.svd(RMy)
-    else:
-        UR, SR, VR = np.linalg.svd(RMx)
-
-    imode =1
-    mag_u = 10
-    tmp = UR[:, imode - 1] * SR[imode - 1] * mag_u
-    doff_tmp = np.zeros((TOT_BPM, 1))
-    doff_tmp[id_to_bpm] = tmp[:, np.newaxis]
-    doff = doff_tmp * np.ones((1,n_samples))
+    doff = randModes(2, RM, id_to_bpm, TOT_BPM)
     don = doff
     y_max = np.ones((id_to_bpm.size, 1)) * 850
     #Simulation
@@ -299,9 +303,6 @@ else:
 np.savez('../data/simresults.npz' , y_sim=y_sim_train, u_sim=u_sim_train, x0_obs=x0_obs_train, xd_obs=xd_obs_train)
 
 #Toggle to simulate with nn controller and graph comparisons
-
-compare = False
-
 if compare:
     mpc = sim.Mpc(
         n_samples, n_delay, doff,
@@ -331,59 +332,58 @@ loss_data = np.load('../data/model/modelloss.npz')
 
 scale_u = 0.001
 
-fig, axs = plt.subplots(2, 5, figsize=(15, 8))
+fig, axs = plt.subplots(2, 3, figsize=(15, 8))
 
 # Subplot 1: Disturbance
 axs[0, 0].plot(doff[id_to_bpm, :].T)
 axs[0, 0].set_title('Disturbance')
 
-# Subplot 2: Disturbance Mode Space
-axs[0, 1].plot((UR.T @ doff[id_to_bpm, :]).T)
-axs[0, 1].set_title('Disturbance Mode Space')
+# # Subplot 2: Disturbance Mode Space
+# axs[0, 1].plot((UR.T @ doff[id_to_bpm, :]).T)
+# axs[0, 1].set_title('Disturbance Mode Space')
 
 # Subplot 3: Input
-axs[0, 2].plot(u_sim_fgm[:, id_to_cm] * scale_u, linestyle='-')  # solid line for u_sim_fgm
+axs[0, 1].plot(u_sim_fgm[:, id_to_cm] * scale_u, linestyle='-')  # solid line for u_sim_fgm
 if compare:
-    axs[0, 2].plot(u_sim_nn[:, id_to_cm] * scale_u, linestyle='--')  # dashed line for u_sim_nn
-axs[0, 2].set_title('Input')
+    axs[0, 1].plot(u_sim_nn[:, id_to_cm] * scale_u, linestyle='--')  # dashed line for u_sim_nn
+axs[0, 1].set_title('Input')
 
 # # Subplot 4: % Error in Input
 if compare:
-    axs[0, 3].plot(u_err[:, id_to_cm] * scale_u, linestyle='-')  # solid line for u_sim_fgm
-    axs[0, 3].set_title('Input Error')
+    axs[0, 2].plot(u_err[:, id_to_cm] * scale_u, linestyle='-')  # solid line for u_sim_fgm
+    axs[0, 2].set_title('Input Error')
 
-# # Subplot 5: Input Mode Space
-axs[1, 0].plot(scale_u * u_sim_fgm[:, id_to_cm] @ VR, linestyle='-')  # solid line for u_sim_fgm
-if compare:
-    axs[1, 0].plot(scale_u * u_sim_nn[:, id_to_cm] @ VR, linestyle='--')  # dashed line for u_sim_nn
-axs[1, 0].set_title('Input Mode Space')
+# # # Subplot 5: Input Mode Space
+# axs[1, 0].plot(scale_u * u_sim_fgm[:, id_to_cm] @ VR, linestyle='-')  # solid line for u_sim_fgm
+# if compare:
+#     axs[1, 0].plot(scale_u * u_sim_nn[:, id_to_cm] @ VR, linestyle='--')  # dashed line for u_sim_nn
+# axs[1, 0].set_title('Input Mode Space')
 
 # Subplot 6: Output
-axs[1, 1].plot(y_sim_fgm[:, id_to_bpm], linestyle='-')  # solid line for y_sim_fgm
+axs[1, 0].plot(y_sim_fgm[:, id_to_bpm], linestyle='-')  # solid line for y_sim_fgm
 if compare:
-    axs[1, 1].plot(y_sim_nn[:, id_to_bpm], linestyle='--')  # dashed line for y_sim_nn
-axs[1, 1].set_title('Output')
+    axs[1, 0].plot(y_sim_nn[:, id_to_bpm], linestyle='--')  # dashed line for y_sim_nn
+axs[1, 0].set_title('Output')
 
-# Subplot 7: Output Mode Space
-axs[1, 2].plot(y_sim_fgm[:, id_to_bpm] @ UR, linestyle='-')  # solid line for y_sim_fgm
-if compare:
-    axs[1, 2].plot(y_sim_nn[:, id_to_bpm] @ UR, linestyle='--')  # dashed line for y_sim_nn
-axs[1, 2].set_title('Output Mode Space')
+# # Subplot 7: Output Mode Space
+# axs[1, 2].plot(y_sim_fgm[:, id_to_bpm] @ UR, linestyle='-')  # solid line for y_sim_fgm
+# if compare:
+#     axs[1, 2].plot(y_sim_nn[:, id_to_bpm] @ UR, linestyle='--')  # dashed line for y_sim_nn
+# axs[1, 2].set_title('Output Mode Space')
 
 
 # Subplot 8: % Error in Output
 if compare:
-    axs[1, 3].plot(y_err[:, id_to_bpm], linestyle='-')  # solid line for y_sim_fgm
-axs[1, 3].set_title('Output Error')
+    axs[1, 1].plot(y_err[:, id_to_bpm], linestyle='-')  # solid line for y_sim_fgm
+axs[1, 1].set_title('Output Error')
 
 #Suplot 9 : Loss
 if compare:
-    axs[1, 4].plot(loss_data['epochs'], loss_data['epoch_losses'])
-    axs[1, 4].set_xlabel('Epoch')
-    axs[1, 4].set_ylabel('Loss')
-    axs[1, 4].set_title('Training Loss')
+    axs[1, 2].plot(loss_data['epochs'], loss_data['epoch_losses'])
+    axs[1, 2].set_xlabel('Epoch')
+    axs[1, 2].set_ylabel('Loss')
+    axs[1, 2].set_title('Training Loss')
 
-plt.suptitle('imode: ' + str(imode) + ' | Direction: ' + pick_direction + ' | n states: ' + str(n_include) )
 
 print("Time taken: ", time.time() - start)
 
@@ -394,6 +394,7 @@ plt.show()
 
 
 
+    
 
 
 
