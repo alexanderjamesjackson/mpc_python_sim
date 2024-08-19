@@ -7,10 +7,7 @@ results = np.load('../data/simresults.npz')
 x0_obs = results['x0_obs']
 xd_obs = results['xd_obs']
 u_sim = results['u_sim']
-print(u_sim.shape)
 
-x0_obs = x0_obs.squeeze()
-xd_obs = xd_obs.squeeze()
 
 
 x_data = np.hstack((x0_obs, xd_obs))

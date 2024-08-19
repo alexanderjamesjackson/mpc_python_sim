@@ -41,7 +41,7 @@ test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
 
 hidden_size = 32
 #Change rate of learning
-learning_rate = 1e-4
+learning_rate = 1e-5
 num_epochs = 500
 
 
