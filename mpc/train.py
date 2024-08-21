@@ -28,11 +28,11 @@ u_test = torch.load(os.path.join(data_dir, 'u_test.pt'))
 
 
 #Hyperparameters
-hidden_size = 32
+hidden_size = 64
 learning_rate = 1e-5
-num_epochs = 150
+num_epochs = 250
 weight_decay = 1e-4
-batch_size = 20
+batch_size = 10
 
 # Create TensorDatasets
 train_dataset = torch.utils.data.TensorDataset(x_train, u_train)
@@ -81,12 +81,23 @@ train_losses =[]
 val_losses = []
 epochs = []
 
-# Train the model!
+# Function for testing the model
+def test_model(model, test_loader):
+    with torch.no_grad():
+        loss_value = []
+        for x_test, u_test in test_loader:
+            x_test = x_test.to(device)
+            u_test = u_test.to(device)
+            predictions = model(x_test)
+            loss_value.append(criterion(predictions, u_test))
+    return np.mean(loss_value)
+
+# Train the model
 total_step = len(train_loader)
 start = time.time()
 for epoch in range(num_epochs):  # episode size
     model.eval()
-    val_loss = criterion(model(x_test), u_test)
+    val_loss = test_model(model, test_loader)
     val_losses.append(val_loss.item())
     TimeRemaining = ((time.time()-start) / (epoch+1)) * (num_epochs - epoch)
     model.train()
@@ -117,16 +128,9 @@ for epoch in range(num_epochs):  # episode size
 
 
 
-# Test the model
-with torch.no_grad():
-    loss_value = []
-    for x_test, u_test in test_loader:
-        x_test = x_test.to(device)
-        u_test = u_test.to(device)
-        predictions = model(x_test)
-        loss_value.append(criterion(predictions, u_test))
 
-    print('Test Loss: {:.4f}'.format(np.mean(loss_value)))
+
+print('Test Loss: {:.4f}'.format(test_model(model, test_loader)))
 
 data_dir = '../data/model'
 torch.save(model.state_dict(), os.path.join(data_dir, 'model.ckpt'))

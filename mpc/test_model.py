@@ -24,6 +24,7 @@ import time
 #Helper function to generate random disturbancemodes
 
 def randModes(seed, RM, id_to_bpm, TOT_BPM):
+    np.random.seed(seed)
     UR, SR, VR = np.linalg.svd(RM)
     weighted_combination = np.zeros_like(UR[:, 0])  
     doff_tmp = np.zeros((TOT_BPM, 1))
@@ -94,7 +95,7 @@ id_to_bpm_x, id_to_cm_x, id_to_bpm_y, id_to_cm_y = DI.diamond_I_configuration_v5
 
 #first n_include BPMs and CMs active for testing
 
-n_include = 8
+n_include = 16
 
 
 id_to_bpm_x = id_to_bpm_x[:n_include]
@@ -219,7 +220,7 @@ n_samples = 6000
 
 
 #Initialise array of seeds for pertubations
-trainseeds = np.linspace(1, 10, 10)
+trainseeds = np.linspace(1, 12, 12).astype(int)
 n_tests = len(trainseeds)
 
 #Storage for training data
@@ -328,6 +329,15 @@ if compare:
 #Unpack Loss Data
 
 loss_data = np.load('../data/model/modelloss.npz')
+y_plt_fgm = y_sim_fgm[:, id_to_bpm]
+u_plt_fgm = u_sim_fgm[:, id_to_cm]
+if compare:
+    y_plt_nn = y_sim_nn[:, id_to_bpm]
+    u_plt_nn = u_sim_nn[:, id_to_cm]
+    u_plt_err = u_err[:, id_to_cm]
+    y_plt_err = y_err[:, id_to_bpm]
+
+
 
 
 # Plotting
@@ -343,27 +353,37 @@ axs[0, 0].set_title('Disturbance')
 
 
 # Subplot 2: Input
-axs[0, 1].plot(u_sim_fgm[:, id_to_cm] * scale_u, linestyle='-')  # solid line for u_sim_fgm
+axs[0, 1].plot(u_plt_fgm * scale_u, linestyle='-')  # solid line for u_sim_fgm
 if compare:
-    axs[0, 1].plot(u_sim_nn[:, id_to_cm] * scale_u, linestyle='--')  # dashed line for u_sim_nn
+    axs[0, 1].plot(u_plt_nn * scale_u, linestyle='--')  # dashed line for u_sim_nn
 axs[0, 1].set_title('Input')
 
 # # Subplot 3: % Error in Input
 if compare:
-    axs[0, 2].plot(u_err[:, id_to_cm] * scale_u, linestyle='-')  # solid line for u_sim_fgm
+    axs[0, 2].plot(u_plt_err * scale_u, linestyle='-')  # solid line for u_sim_fgm
     axs[0, 2].set_title('Input Error')
+
+#Subplot 4: Steady State Output
+start_index = int(n_samples/2)
+n_plt = np.linspace(0, n_samples, n_samples)
+axs[0, 3].plot(n_plt[start_index:],y_plt_fgm[start_index:], linestyle='-')  # solid line for y_sim_fgm
+if compare:
+    axs[0, 3].plot(n_plt[start_index:],y_plt_nn[start_index:], linestyle='--')  # dashed line for y_sim_nn
+axs[0, 3].set_title('Steady State Output')
+
+
 
 
 # Subplot 4: Output
-axs[1, 0].plot(y_sim_fgm[:, id_to_bpm], linestyle='-')  # solid line for y_sim_fgm
+axs[1, 0].plot(y_plt_fgm, linestyle='-')  # solid line for y_sim_fgm
 if compare:
-    axs[1, 0].plot(y_sim_nn[:, id_to_bpm], linestyle='--')  # dashed line for y_sim_nn
+    axs[1, 0].plot(y_plt_nn, linestyle='--')  # dashed line for y_sim_nn
 axs[1, 0].set_title('Output')
 
 
 # Subplot 5: % Error in Output
 if compare:
-    axs[1, 1].plot(y_err[:, id_to_bpm], linestyle='-')  # solid line for y_sim_fgm
+    axs[1, 1].plot(y_plt_err, linestyle='-')  # solid line for y_sim_fgm
 axs[1, 1].set_title('Output Error')
 
 #Subplot 6 : Training Loss
