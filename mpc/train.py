@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import time
 import pickle as pkl
 
+import threading
 from utils import model as md
 
 # cuda
@@ -28,11 +29,11 @@ u_test = torch.load(os.path.join(data_dir, 'u_test.pt'))
 
 
 #Hyperparameters
-hidden_size = 64
+hidden_size = 256
 learning_rate = 1e-5
-num_epochs = 250
+num_epochs = 400
 weight_decay = 1e-4
-batch_size = 10
+batch_size = 20
 
 # Create TensorDatasets
 train_dataset = torch.utils.data.TensorDataset(x_train, u_train)
@@ -95,7 +96,26 @@ def test_model(model, test_loader):
 # Train the model
 total_step = len(train_loader)
 start = time.time()
+
+#Start thread to monitor user input for early exit
+keep_training = True
+exit_event = threading.Event()
+
+#Function to check for user input
+def check_user_input():
+    global keep_training
+    input("Press Enter to stop training here...\n")
+    keep_training = False
+    exit_event.set()
+
+
+input_thread = threading.Thread(target=check_user_input)
+input_thread.start()
+
+
 for epoch in range(num_epochs):  # episode size
+    if keep_training == False:
+        break
     model.eval()
     val_loss = test_model(model, test_loader)
     val_losses.append(val_loss.item())
@@ -120,14 +140,15 @@ for epoch in range(num_epochs):  # episode size
         loss_values.append(loss.item())
 
         if (i + 1) % 100 == 0:
-            print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, Validation Loss: {:.4f}, Time Remaining: {} mins {} s'.format(epoch+1, num_epochs, i + 1, total_step, loss.item(), val_loss, int(TimeRemaining/60), round(TimeRemaining%60)))
+            print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, Validation Loss: {:.4f}, Time Remaining: {} mins {} s, stop(ENTER)'.format(epoch+1, num_epochs, i + 1, total_step, loss.item(), val_loss, int(TimeRemaining/60), round(TimeRemaining%60)))
     epochs.append(epoch)
     train_losses.append(loss.item())
     
-    
+# Signal the thread to exit if it hasn't already
+exit_event.set()
 
-
-
+# Wait for the input thread to finish
+input_thread.join()
 
 
 print('Test Loss: {:.4f}'.format(test_model(model, test_loader)))

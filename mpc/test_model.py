@@ -32,7 +32,7 @@ def randModes(seed, RM, id_to_bpm, TOT_BPM):
         #Generate random pertubation
         pert = 1 + np.random.normal(0, 0.1, 1)
         #Change the ith mode by the pertubation
-        weighted_combination += SR[i]*pert * UR[:, i] * 100
+        weighted_combination += SR[i]*pert * UR[:, i] * 10
     doff_tmp[id_to_bpm] = weighted_combination[:, np.newaxis]
     doff = doff_tmp * np.ones((1,n_samples))
 
@@ -68,9 +68,9 @@ do_step = True
 sim_IMC = False
 use_FGM = True
 #Simulates multiple modes of disturbance to get training data
-train = True
+train = False
 #Toggle for comparing nn performance and mpc performance
-compare = False
+compare = True
 
 #Hardlimits
 fname_correctors = '../data/corrector_data.csv'
@@ -95,7 +95,7 @@ id_to_bpm_x, id_to_cm_x, id_to_bpm_y, id_to_cm_y = DI.diamond_I_configuration_v5
 
 #first n_include BPMs and CMs active for testing
 
-n_include = 16
+n_include = 128
 
 
 id_to_bpm_x = id_to_bpm_x[:n_include]
@@ -220,7 +220,7 @@ n_samples = 6000
 
 
 #Initialise array of seeds for pertubations
-trainseeds = np.linspace(1, 12, 12).astype(int)
+trainseeds = np.linspace(1, 20, 20).astype(int)
 n_tests = len(trainseeds)
 
 #Storage for training data
