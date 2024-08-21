@@ -14,10 +14,10 @@ import matplotlib.pyplot as plt
 import pickle as pkl
 import scipy.sparse as sparse
 from scipy.io import loadmat
-import sim_mpc as sim
-import model as md
-import processdata as process
-import diamond_I_configuration_v5 as DI
+from utils import sim_mpc as sim
+from utils import model as md
+from utils import processdata as process
+from utils import diamond_I_configuration_v5 as DI
 import pandas as pd
 import time
 

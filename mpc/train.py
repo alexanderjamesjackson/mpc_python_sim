@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import time
 import pickle as pkl
 
-import model as md
+from utils import model as md
 
 # cuda
 device = 'cpu'
