@@ -3,6 +3,7 @@ import numpy as np
 import scipy.sparse as sparse
 import torch.nn as nn
 import torch
+import torch.nn.functional as F
 
 class Mpc:
     def __init__(
@@ -248,7 +249,7 @@ class Mpc:
         return self.y_sim, self.u_sim, self.x0_obs, self.xd_obs
     
 
-    #Function to solve the MPC problem using a neural network controller
+    #Solves the MPC problem using nn
     def solvenn_update_awr(self,k):
         ##DIMENSION ISSUES
         x_aug = torch.tensor(np.transpose(np.vstack((self.x_obs_new[0], self.xd_obs_new)))).float().to(self.device)
@@ -260,11 +261,10 @@ class Mpc:
         self.y_awr = self.C_awr @ self.x_awr + self.D_awr @ u_nn
 
 
-    #Simulate using a neural network controller
-    def sim_nn(self,n_state,hidden_size,n_ctrl,params,device):
+    #Simulate using nn
+    def sim_nn(self,model,device):
         self.device = device
-        self.nn_controller = NNController(n_state, hidden_size, n_ctrl)
-        self.nn_controller.load_state_dict(params)
+        self.nn_controller = model
         self.nn_controller.eval()
         self.nn_controller.to(torch.device(device))
 
@@ -292,24 +292,6 @@ class Mpc:
 
 
 
-# Define NN
-class NNController(nn.Module):
-    def __init__(self, n_state, hidden_size, n_ctrl):
-        super(NNController, self).__init__()
-        self.hidden_size = hidden_size
 
-        # Initialize weights and biases for all layers
-        self.fc1 = nn.Linear(n_state, hidden_size)
-        self.act1 = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.act2 = nn.ReLU()
-        self.fc3 = nn.Linear(hidden_size, n_ctrl)
 
-    def forward(self, x):  # x: (n_batch, n_state)
-        out = self.fc1(x)
-        out = self.act1(out)
-        out = self.fc2(out)
-        out = self.act2(out)
-        out = self.fc3(out)
-        return out
 

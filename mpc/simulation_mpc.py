@@ -201,12 +201,6 @@ mpc_osqp = sim.Mpc(
 
 y_sim ,u_sim, x0_obs, xd_obs = mpc_osqp.sim_mpc(use_FGM)
 
-u_sim_act = u_sim[:, id_to_cm]
-
-# Save the simulation results
-
-np.savez('../data/simresults.npz' , y_sim=y_sim, u_sim=u_sim_act, x0_obs=x0_obs, xd_obs=xd_obs)
-
 
 # Plotting
 

@@ -3,6 +3,7 @@ from torch import nn
 from torch.autograd import Function, Variable
 from torch.nn.parameter import Parameter
 import torch.optim as optim
+import torch.nn.functional as F
 
 import numpy as np
 import numpy.random as npr
@@ -10,11 +11,13 @@ import numpy.random as npr
 import os
 import matplotlib.pyplot as plt
 
+import time
 import pickle as pkl
 
-# cuda
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+import model as md
 
+# cuda
+device = 'cpu'
 data_dir = '../data'
 
 # Load tensors from the specified directory
@@ -24,13 +27,18 @@ u_train = torch.load(os.path.join(data_dir, 'u_train.pt'))
 u_test = torch.load(os.path.join(data_dir, 'u_test.pt'))
 
 
+#Hyperparameters
+hidden_size = 32
+learning_rate = 1e-5
+num_epochs = 150
+weight_decay = 1e-4
+batch_size = 20
 
 # Create TensorDatasets
 train_dataset = torch.utils.data.TensorDataset(x_train, u_train)
 test_dataset = torch.utils.data.TensorDataset(x_test, u_test)
 
 # Create DataLoaders
-batch_size = 5
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
                                            batch_size=batch_size,
                                            shuffle=True)
@@ -39,16 +47,13 @@ test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
                                           shuffle=False)
 
 
-hidden_size = 32
-#Change rate of learning
-learning_rate = 1e-5
-num_epochs = 500
 
 
 
 n_state, n_ctrl = x_train.size(1), u_train.size(1)
 n_sc = n_state + n_ctrl
 
+# Save the sizes
 sizes={
     'n_state': n_state,
     'n_ctrl': n_ctrl,
@@ -60,52 +65,31 @@ fname = os.path.join(data_dir, 'sizes.pkl')
 with open(fname, 'wb') as f:
     pkl.dump(sizes, f)
 
-class NNController(nn.Module):
-    def __init__(self, n_state, hidden_size, n_ctrl):
-        super(NNController, self).__init__()
-        self.hidden_size = hidden_size
 
-        # Initialize weights and biases for all layers
-        self.fc1 = nn.Linear(n_state, hidden_size)
-        self.act1 = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.act2 = nn.ReLU()
-        self.fc3 = nn.Linear(hidden_size, n_ctrl)
-
-    def forward(self, x):  # x: (n_batch, n_state)
-        out = self.fc1(x)
-        out = self.act1(out)
-        out = self.fc2(out)
-        out = self.act2(out)
-        out = self.fc3(out)
-        return out
-
-
-# Define the loss function
-class get_loss(nn.Module):
-    def __init__(self):
-        super(get_loss, self).__init__()
-
-    def forward(self, predictions, targets):
-        loss = torch.norm(predictions-targets)
-        return loss
 
 
 # Construct the NN model
-model = NNController(n_state, hidden_size, n_ctrl)
-
+model = md.NNController(n_state, hidden_size, n_ctrl)
+model.to(device)
 # Loss and optimizer
-criterion = get_loss()
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+criterion = md.get_loss()
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
 # store the loss values
 loss_values = []
-epoch_losses =[]
+train_losses =[]
+val_losses = []
 epochs = []
 
 # Train the model!
 total_step = len(train_loader)
+start = time.time()
 for epoch in range(num_epochs):  # episode size
+    model.eval()
+    val_loss = criterion(model(x_test), u_test)
+    val_losses.append(val_loss.item())
+    TimeRemaining = ((time.time()-start) / (epoch+1)) * (num_epochs - epoch)
+    model.train()
     for i, (x_train, u_train) in enumerate(train_loader):
         # Move tensors to the configured device
 
@@ -125,9 +109,10 @@ for epoch in range(num_epochs):  # episode size
         loss_values.append(loss.item())
 
         if (i + 1) % 100 == 0:
-            print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}'.format(epoch+1, num_epochs, i + 1, total_step, loss.item()))
+            print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}, Validation Loss: {:.4f}, Time Remaining: {} mins {} s'.format(epoch+1, num_epochs, i + 1, total_step, loss.item(), val_loss, int(TimeRemaining/60), round(TimeRemaining%60)))
     epochs.append(epoch)
-    epoch_losses.append(loss.item())
+    train_losses.append(loss.item())
+    
     
 
 
@@ -147,13 +132,21 @@ data_dir = '../data/model'
 torch.save(model.state_dict(), os.path.join(data_dir, 'model.ckpt'))
 
 epochs = np.array(epochs)
-epoch_losses = np.array(epoch_losses)
+train_losses = np.array(train_losses)
+val_losses = np.array(val_losses)
 
-np.savez('../data/model/modelloss' , epochs = epochs, epoch_losses = epoch_losses)
+np.savez('../data/model/modelloss' , epochs = epochs, train_losses = train_losses, val_losses = val_losses)
 
+fig, axs = plt.subplots(1, 2, figsize=(15, 8))
 
-plt.plot(epochs, epoch_losses)
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.title('Training Loss')
+axs[0].plot(epochs, train_losses)
+axs[0].set_xlabel('Epoch')
+axs[0].set_ylabel('Loss')
+axs[0].set_title('Training Loss')
+
+axs[1].plot(epochs, val_losses)
+axs[1].set_xlabel('Epoch')
+axs[1].set_ylabel('Loss')
+axs[1].set_title('Validation Loss')
+
 plt.show()
