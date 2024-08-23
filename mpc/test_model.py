@@ -17,6 +17,7 @@ from scipy.io import loadmat
 from utils import sim_mpc as sim
 from utils import model as md
 from utils import processdata as process
+
 from utils import diamond_I_configuration_v5 as DI
 import pandas as pd
 import time
@@ -54,6 +55,8 @@ n_state = sizes['n_state']
 n_ctrl = sizes['n_ctrl']
 hidden_size = sizes['hidden_size']
 n_sc = sizes['n_sc']
+num_layers = sizes['num_layers']
+sequence_length = sizes['sequence_length']
 
 model_path = '../data/model/model.ckpt'
 nnparams = torch.load(model_path)
@@ -69,8 +72,11 @@ sim_IMC = False
 use_FGM = True
 #Simulates multiple modes of disturbance to get training data
 train = False
+trainRNN = True
 #Toggle for comparing nn performance and mpc performance
 compare = True
+#Toggle for using DAGGER
+use_dagger = False
 
 #Hardlimits
 fname_correctors = '../data/corrector_data.csv'
@@ -95,7 +101,7 @@ id_to_bpm_x, id_to_cm_x, id_to_bpm_y, id_to_cm_y = DI.diamond_I_configuration_v5
 
 #first n_include BPMs and CMs active for testing
 
-n_include = 128
+n_include = 4
 
 
 id_to_bpm_x = id_to_bpm_x[:n_include]
@@ -220,7 +226,7 @@ n_samples = 6000
 
 
 #Initialise array of seeds for pertubations
-trainseeds = np.linspace(1, 20, 20).astype(int)
+trainseeds = np.linspace(1, 10, 10).astype(int)
 n_tests = len(trainseeds)
 
 #Storage for training data
@@ -263,13 +269,21 @@ if train:
             mat_data['A'][:n_include,:n_include], mat_data['B'][:n_include,:n_include], mat_data['C'][:n_include,:n_include], mat_data['D'][:n_include,:n_include],
             SOFB_setp, beta_fgm)
 
-
-        #Simulate and store trajectory
-        y_sim_fgm ,u_sim_fgm, x0_obs_fgm, xd_obs_fgm = mpc.sim_mpc(use_FGM)
-        u_sim_train[(k-1)*n_samples:k*n_samples, :] = u_sim_fgm[:,id_to_cm]
-        xd_obs_train[(k-1)*n_samples:k*n_samples, :] = xd_obs_fgm
-        x0_obs_train[(k-1)*n_samples:k*n_samples, :] = x0_obs_fgm
-        y_sim_train[(k-1)*n_samples:k*n_samples, :] = y_sim_fgm[:,id_to_bpm]
+        if use_dagger:
+            model = md.NNController(n_state, hidden_size, n_ctrl)
+            model.load_state_dict(nnparams)
+            #Simulate and store trajectory
+            u_sim_expert, x0_obs_dggr, xd_obs_dggr = mpc.sim_dagger(model, device)
+            u_sim_train[(k-1)*n_samples:k*n_samples, :] = u_sim_expert[:,id_to_cm]
+            xd_obs_train[(k-1)*n_samples:k*n_samples, :] = xd_obs_dggr
+            x0_obs_train[(k-1)*n_samples:k*n_samples, :] = x0_obs_dggr
+        else:
+            #Simulate and store trajectory
+            y_sim_fgm ,u_sim_fgm, x0_obs_fgm, xd_obs_fgm = mpc.sim_mpc(use_FGM)
+            u_sim_train[(k-1)*n_samples:k*n_samples, :] = u_sim_fgm[:,id_to_cm]
+            xd_obs_train[(k-1)*n_samples:k*n_samples, :] = xd_obs_fgm
+            x0_obs_train[(k-1)*n_samples:k*n_samples, :] = x0_obs_fgm
+            y_sim_train[(k-1)*n_samples:k*n_samples, :] = y_sim_fgm[:,id_to_bpm]
         k+=1
 
 else:
@@ -298,8 +312,13 @@ else:
     y_sim_fgm ,u_sim_fgm, x0_obs_fgm, xd_obs_fgm = mpc.sim_mpc(use_FGM)
 
 #Save training data
-data_dir = '../data'
-process.process_data(x0_obs_train, xd_obs_train, u_sim_train, data_dir)
+if train:
+    data_dir = '../data'
+    if trainRNN:
+        process.process_data_sequential(x0_obs_train, xd_obs_train, u_sim_train, data_dir, n_samples)
+    else:    
+        process.process_data_shuff(x0_obs_train, xd_obs_train, u_sim_train, data_dir, use_dagger)
+    
 
 
 if compare:
@@ -314,10 +333,10 @@ if compare:
         mat_data['A'][:n_include,:n_include], mat_data['B'][:n_include,:n_include], mat_data['C'][:n_include,:n_include], mat_data['D'][:n_include,:n_include],
         SOFB_setp, beta_fgm)
     #Load nn model
-    model = md.NNController(n_state, hidden_size, n_ctrl)
+    model = md.RNNController(n_state, hidden_size, n_ctrl, num_layers=num_layers)
     model.load_state_dict(nnparams)
     #Simulate using nn model
-    y_sim_nn ,u_sim_nn, x0_obs_nn, xd_obs_nn = mpc.sim_nn(model, device)
+    y_sim_nn ,u_sim_nn, x0_obs_nn, xd_obs_nn = mpc.sim_nn(model, device, RNN=True, sequence_length=sequence_length)
 
     y_err = (y_sim_fgm - y_sim_nn) 
     u_err = (u_sim_fgm - u_sim_nn) 
@@ -328,86 +347,90 @@ if compare:
 
 #Unpack Loss Data
 
-loss_data = np.load('../data/model/modelloss.npz')
-y_plt_fgm = y_sim_fgm[:, id_to_bpm]
-u_plt_fgm = u_sim_fgm[:, id_to_cm]
-if compare:
-    y_plt_nn = y_sim_nn[:, id_to_bpm]
-    u_plt_nn = u_sim_nn[:, id_to_cm]
-    u_plt_err = u_err[:, id_to_cm]
-    y_plt_err = y_err[:, id_to_bpm]
+
 
 
 
 
 # Plotting
 
+if not use_dagger:
+    loss_data = np.load('../data/model/modelloss.npz')
+    y_plt_fgm = y_sim_fgm[:, id_to_bpm]
+    u_plt_fgm = u_sim_fgm[:, id_to_cm]
+    if compare:
+        y_plt_nn = y_sim_nn[:, id_to_bpm]
+        u_plt_nn = u_sim_nn[:, id_to_cm]
+        u_plt_err = u_err[:, id_to_cm]
+        y_plt_err = y_err[:, id_to_bpm]
 
-scale_u = 0.001
+    scale_u = 0.001
 
-fig, axs = plt.subplots(2, 4, figsize=(15, 8))
+    fig, axs = plt.subplots(2, 4, figsize=(15, 8))
 
-# Subplot 1: Disturbance
-axs[0, 0].plot(doff[id_to_bpm, :].T)
-axs[0, 0].set_title('Disturbance')
-
-
-# Subplot 2: Input
-axs[0, 1].plot(u_plt_fgm * scale_u, linestyle='-')  # solid line for u_sim_fgm
-if compare:
-    axs[0, 1].plot(u_plt_nn * scale_u, linestyle='--')  # dashed line for u_sim_nn
-axs[0, 1].set_title('Input')
-
-# # Subplot 3: % Error in Input
-if compare:
-    axs[0, 2].plot(u_plt_err * scale_u, linestyle='-')  # solid line for u_sim_fgm
-    axs[0, 2].set_title('Input Error')
-
-#Subplot 4: Steady State Output
-start_index = int(n_samples/2)
-n_plt = np.linspace(0, n_samples, n_samples)
-axs[0, 3].plot(n_plt[start_index:],y_plt_fgm[start_index:], linestyle='-')  # solid line for y_sim_fgm
-if compare:
-    axs[0, 3].plot(n_plt[start_index:],y_plt_nn[start_index:], linestyle='--')  # dashed line for y_sim_nn
-axs[0, 3].set_title('Steady State Output')
+    # Subplot 1: Disturbance
+    axs[0, 0].plot(doff[id_to_bpm, :].T)
+    axs[0, 0].set_title('Disturbance')
 
 
+    # Subplot 2: Input
+    axs[0, 1].plot(u_plt_fgm * scale_u, linestyle='-')  # solid line for u_sim_fgm
+    if compare:
+        axs[0, 1].plot(u_plt_nn * scale_u, linestyle='--')  # dashed line for u_sim_nn
+    axs[0, 1].set_title('Input')
+
+    # # Subplot 3: % Error in Input
+    if compare:
+        axs[0, 2].plot(u_plt_err * scale_u, linestyle='-')  # solid line for u_sim_fgm
+        axs[0, 2].set_title('Input Error')
+
+    #Subplot 4: Steady State Output
+    start_index = int(n_samples/2)
+    n_plt = np.linspace(0, n_samples, n_samples)
+    axs[0, 3].plot(n_plt[start_index:],y_plt_fgm[start_index:], linestyle='-')  # solid line for y_sim_fgm
+    if compare:
+        axs[0, 3].plot(n_plt[start_index:],y_plt_nn[start_index:], linestyle='--')  # dashed line for y_sim_nn
+    axs[0, 3].set_title('Steady State Output')
 
 
-# Subplot 4: Output
-axs[1, 0].plot(y_plt_fgm, linestyle='-')  # solid line for y_sim_fgm
-if compare:
-    axs[1, 0].plot(y_plt_nn, linestyle='--')  # dashed line for y_sim_nn
-axs[1, 0].set_title('Output')
 
 
-# Subplot 5: % Error in Output
-if compare:
-    axs[1, 1].plot(y_plt_err, linestyle='-')  # solid line for y_sim_fgm
-axs[1, 1].set_title('Output Error')
+    # Subplot 4: Output
+    axs[1, 0].plot(y_plt_fgm, linestyle='-')  # solid line for y_sim_fgm
+    if compare:
+        axs[1, 0].plot(y_plt_nn, linestyle='--')  # dashed line for y_sim_nn
+    axs[1, 0].set_title('Output')
 
-#Subplot 6 : Training Loss
-if compare:
-    axs[1, 2].plot(loss_data['epochs'], loss_data['train_losses'])
-    axs[1, 2].set_xlabel('Epoch')
-    axs[1, 2].set_ylabel('Loss')
-    axs[1, 2].set_title('Training Loss')
+
+    # Subplot 5: % Error in Output
+    if compare:
+        axs[1, 1].plot(y_plt_err, linestyle='-')  # solid line for y_sim_fgm
+    axs[1, 1].set_title('Output Error')
+
+    #Subplot 6 : Training Loss
+    if compare:
+        axs[1, 2].plot(loss_data['epochs'], loss_data['train_losses'])
+        axs[1, 2].set_xlabel('Epoch')
+        axs[1, 2].set_ylabel('Loss')
+        axs[1, 2].set_title('Training Loss')
+        
+    #Subplot 7: Validation Loss
+    if compare:
+        #Only plot once model has settled
+        axs[1, 3].plot(loss_data['epochs'][100:], loss_data['val_losses'][100:])
+        axs[1, 3].set_xlabel('Epoch')
+        axs[1, 3].set_ylabel('Loss')
+        axs[1, 3].set_title('Validation Loss')
+
+
+
     
-#Subplot 7: Validation Loss
-if compare:
-    #Only plot once model has settled
-    axs[1, 3].plot(loss_data['epochs'][100:], loss_data['val_losses'][100:])
-    axs[1, 3].set_xlabel('Epoch')
-    axs[1, 3].set_ylabel('Loss')
-    axs[1, 3].set_title('Validation Loss')
+    print("Time taken: ", time.time() - start)
+    # # Adjust layout for better spacing
+    plt.tight_layout()
+    plt.show()
 
 
-
-print("Time taken: ", time.time() - start)
-
-# # Adjust layout for better spacing
-plt.tight_layout()
-plt.show()
 
 
 

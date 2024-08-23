@@ -4,6 +4,7 @@ import scipy.sparse as sparse
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
+import random as rand
 
 class Mpc:
     def __init__(
@@ -60,6 +61,7 @@ class Mpc:
         self.x_sim = np.zeros((self.nx_plant, 1))
         self.y_sim = np.zeros((self.ny_plant, n_samples))
         self.u_sim = np.zeros((self.nu_plant, n_samples))
+        self.u_sim_expert = np.zeros((self.nu_plant, n_samples))
 
         #Variables for AWR
         self.ny_awr , self.nx_awr = np.size(C_awr,0) , np.size(C_awr,1)
@@ -213,7 +215,8 @@ class Mpc:
             out_global = (1+self.beta_fgm) * self.z_new - self.beta_fgm * self.z_old
         fgm_result = self.z_new
 
-        self.u_sim[self.id_to_cm, k] = fgm_result.flatten()
+        #sign = rand.choice([-1, 1])
+        self.u_sim[self.id_to_cm, k] = fgm_result.flatten() #+ np.ones(self.id_to_cm.size) * 0.08 * sign
 
         self.x_awr = self.A_awr @ self.x_awr + self.B_awr @ fgm_result.astype(np.float64)
         self.y_awr = self.C_awr @ self.x_awr + self.D_awr @ fgm_result.astype(np.float64)
@@ -250,19 +253,44 @@ class Mpc:
     
 
     #Solves the MPC problem using nn
-    def solvenn_update_awr(self,k):
-        ##DIMENSION ISSUES
+    def solvenn(self,k):
         x_aug = torch.tensor(np.transpose(np.vstack((self.x_obs_new[0], self.xd_obs_new)))).float().to(self.device)
-        u_nn = self.nn_controller(x_aug).detach().numpy()
-        u_nn = np.transpose(u_nn)
+        self.u_nn = self.nn_controller(x_aug).detach().numpy()
+        self.u_nn = np.transpose(self.u_nn)
         #######
-        self.u_sim[self.id_to_cm,k] = u_nn.flatten()
-        self.x_awr = self.A_awr @ self.x_awr + self.B_awr @ u_nn
-        self.y_awr = self.C_awr @ self.x_awr + self.D_awr @ u_nn
+        self.u_sim[self.id_to_cm,k] = self.u_nn.flatten()
+    
+    #Solves the MPC problem using rnn
+    def solvernn(self,k):
+        concat_states = np.hstack((self.x0_obs, self.xd_obs))
+        x_seq = concat_states[k-self.sequence_length+1:k+1]
+        x_seq = x_seq.transpose(2,0,1)
+        x_aug = torch.tensor(x_seq).float().to(self.device)
+        self.u_nn = self.nn_controller(x_aug).detach().numpy()
+        self.u_nn = np.transpose(self.u_nn)
+        self.u_sim[self.id_to_cm,k] = self.u_nn.flatten()
+
+    #Updates the AWR state using nn
+    def nn_update_awr(self):
+        self.x_awr = self.A_awr @ self.x_awr + self.B_awr @ self.u_nn
+        self.y_awr = self.C_awr @ self.x_awr + self.D_awr @ self.u_nn
+
+    def solveFGM_expert(self, k):
+
+        out_global = self.u_sim[self.id_to_cm, k-1][:, np.newaxis]
+        for i in range(self.MAX_ITER):
+            self.z_old = self.z_new
+            t = self.J_FGM @ out_global - self.q
+            self.z_new = np.maximum(self.l_constr, np.minimum(self.u_constr, t))
+            out_global = (1+self.beta_fgm) * self.z_new - self.beta_fgm * self.z_old
+        fgm_result = self.z_new
+
+        self.u_sim_expert[self.id_to_cm, k] = fgm_result.flatten()
 
 
     #Simulate using nn
-    def sim_nn(self,model,device):
+    def sim_nn(self,model,device, sequence_length = 0, RNN = False):
+        self.sequence_length = sequence_length
         self.device = device
         self.nn_controller = model
         self.nn_controller.eval()
@@ -279,7 +307,11 @@ class Mpc:
                 self.calc_obs_state(k)
                 self.update_obs_measurement()
                 self.update_obs_state(k)
-                self.solvenn_update_awr(k)
+                if RNN:
+                    self.solvernn(k)
+                else:
+                    self.solvenn(k)
+                self.nn_update_awr()
             self.update_plant_state(k)
 
         self.u_sim = np.transpose(self.u_sim)
@@ -288,6 +320,35 @@ class Mpc:
         self.xd_obs = self.xd_obs.reshape((self.n_samples, self.nx_obs))
         return self.y_sim, self.u_sim, self.x0_obs, self.xd_obs
 
+
+    def sim_dagger(self, model, device):
+        self.use_FGM = True
+        self.device = device
+        self.nn_controller = model
+        self.nn_controller.eval()
+        self.nn_controller.to(torch.device(device))
+
+        for k in range(self.n_samples):
+            #Measurements
+            if k % 100 == 0:
+                print(f"Simulation progress: {k/self.n_samples*100:.2f}%")
+
+            self.update_y_sim(k)
+            if k >= self.n_delay:
+                self.update_y_meas(k)
+                self.calc_obs_state(k)
+                self.update_obs_measurement()
+                self.update_obs_state(k)
+                self.update_q_limits()
+                self.solveFGM_expert(k)
+                self.solvenn(k)
+                self.nn_update_awr()
+            self.update_plant_state(k)
+
+        self.u_sim_expert = np.transpose(self.u_sim_expert)
+        self.x0_obs = self.x0_obs.reshape((self.n_samples, self.nx_obs))
+        self.xd_obs = self.xd_obs.reshape((self.n_samples, self.nx_obs))
+        return self.u_sim_expert, self.x0_obs, self.xd_obs
 
 
 

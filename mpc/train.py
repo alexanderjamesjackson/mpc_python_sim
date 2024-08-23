@@ -17,6 +17,7 @@ import pickle as pkl
 import threading
 from utils import model as md
 
+
 # cuda
 device = 'cpu'
 data_dir = '../data'
@@ -27,14 +28,20 @@ x_test = torch.load(os.path.join(data_dir, 'x_test.pt'))
 u_train = torch.load(os.path.join(data_dir, 'u_train.pt'))
 u_test = torch.load(os.path.join(data_dir, 'u_test.pt'))
 
+#Settings
+#RNN toggle
+if x_train.ndim == 3:
+    RNN = True
+elif x_train.ndim == 2:
+    RNN = False
 
 #Hyperparameters
-hidden_size = 256
+hidden_size = 32
 learning_rate = 1e-5
 num_epochs = 400
 weight_decay = 1e-4
-batch_size = 20
-
+batch_size = 5
+num_layers = 1
 # Create TensorDatasets
 train_dataset = torch.utils.data.TensorDataset(x_train, u_train)
 test_dataset = torch.utils.data.TensorDataset(x_test, u_test)
@@ -50,16 +57,24 @@ test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
 
 
 
-
-n_state, n_ctrl = x_train.size(1), u_train.size(1)
-n_sc = n_state + n_ctrl
+#If using rnn use x_train.size(2) 
+if RNN:
+    n_state, n_ctrl = x_train.size(2), u_train.size(1)
+    n_sc = n_state + n_ctrl
+    sequence_length = x_train.size(1)
+else:
+    n_state, n_ctrl = x_train.size(1), u_train.size(1)
+    n_sc = n_state + n_ctrl
+    sequence_length = 0
 
 # Save the sizes
 sizes={
     'n_state': n_state,
     'n_ctrl': n_ctrl,
     'hidden_size': hidden_size,
-    'n_sc': n_sc
+    'n_sc': n_sc,
+    'num_layers': num_layers,
+    'sequence_length': sequence_length
 }
 
 fname = os.path.join(data_dir, 'sizes.pkl')
@@ -68,12 +83,16 @@ with open(fname, 'wb') as f:
 
 
 
+if RNN:
+    model = md.RNNController(n_state, hidden_size, n_ctrl, num_layers=num_layers)
+    criterion = md.get_loss()
 
+else:
+    model = md.NNController(n_state, hidden_size, n_ctrl)
+    criterion = md.get_loss()
 # Construct the NN model
-model = md.NNController(n_state, hidden_size, n_ctrl)
 model.to(device)
 # Loss and optimizer
-criterion = md.get_loss()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
 # store the loss values
@@ -160,8 +179,12 @@ epochs = np.array(epochs)
 train_losses = np.array(train_losses)
 val_losses = np.array(val_losses)
 
-np.savez('../data/model/modelloss' , epochs = epochs, train_losses = train_losses, val_losses = val_losses)
+np.savez('../data/model/modelloss.npz' , epochs = epochs, train_losses = train_losses, val_losses = val_losses)
 
+#Log in storage with other models
+torch.save(model.state_dict(), '../data/models/ckpt/tp-{}-ns-{}-hs-{}-bs-{}.ckpt'.format(model.type, n_state, hidden_size, batch_size))
+
+np.savez('../data/models/losses/tp-{}-ns-{}-hs-{}-bs-{}.npz'.format(model.type, n_state, hidden_size, batch_size), epochs = epochs, train_losses = train_losses, val_losses = val_losses)
 fig, axs = plt.subplots(1, 2, figsize=(15, 8))
 
 axs[0].plot(epochs, train_losses)

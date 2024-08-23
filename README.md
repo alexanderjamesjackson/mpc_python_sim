@@ -2,7 +2,7 @@ mpc:
 
     model.py - allows for design of neural network and loss function
 
-    processdata.py - helper function for constructing datasets
+    processdata.py - helper function for constructing datasets can construct 1 to 1 or 5 to 1 for rnn
 
     diamond_I_configuration_v5.py - helper function for initialising DLS actuators and sensors
 
@@ -16,6 +16,6 @@ mpc:
                     Saves training data with varied disturbances
                     Runs comparison between nn and mpc
 
-    train.py - Executable, trains network defined in model.py with data saved from test_model.py
+    train.py - Executable, trains network with data saved from test_model.py
 
 
