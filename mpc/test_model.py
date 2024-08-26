@@ -71,10 +71,10 @@ do_step = True
 sim_IMC = False
 use_FGM = True
 #Simulates multiple modes of disturbance to get training data
-train = False
-trainRNN = True
+train = True
+trainRNN = False
 #Toggle for comparing nn performance and mpc performance
-compare = True
+compare = False
 #Toggle for using DAGGER
 use_dagger = False
 
@@ -101,7 +101,7 @@ id_to_bpm_x, id_to_cm_x, id_to_bpm_y, id_to_cm_y = DI.diamond_I_configuration_v5
 
 #first n_include BPMs and CMs active for testing
 
-n_include = 4
+n_include = 16
 
 
 id_to_bpm_x = id_to_bpm_x[:n_include]
@@ -226,7 +226,7 @@ n_samples = 6000
 
 
 #Initialise array of seeds for pertubations
-trainseeds = np.linspace(1, 10, 10).astype(int)
+trainseeds = np.linspace(1, 10*n_include, 10*n_include).astype(int)
 n_tests = len(trainseeds)
 
 #Storage for training data
@@ -243,9 +243,9 @@ SOFB_setp = np.where(SOFB_setp > u_max, u_max, SOFB_setp)
 SOFB_setp = np.where(SOFB_setp < -u_max, -u_max, SOFB_setp)
 
 if train:
-
+    k = 1
     for seed in trainseeds:
-        k = 1
+        print('[{}/{}]'.format(k, n_tests))
         #Generate random disturbance modes based on seed
         doff = randModes(seed, RM, id_to_bpm, TOT_BPM)
 
@@ -270,16 +270,18 @@ if train:
             SOFB_setp, beta_fgm)
 
         if use_dagger:
-            model = md.NNController(n_state, hidden_size, n_ctrl)
+            model = md.RNNController(n_state, hidden_size, n_ctrl, num_layers)
             model.load_state_dict(nnparams)
             #Simulate and store trajectory
-            u_sim_expert, x0_obs_dggr, xd_obs_dggr = mpc.sim_dagger(model, device)
+            u_sim_expert, x0_obs_dggr, xd_obs_dggr = mpc.sim_dagger(model, device, sequence_length=sequence_length, RNN=True)
             u_sim_train[(k-1)*n_samples:k*n_samples, :] = u_sim_expert[:,id_to_cm]
             xd_obs_train[(k-1)*n_samples:k*n_samples, :] = xd_obs_dggr
             x0_obs_train[(k-1)*n_samples:k*n_samples, :] = x0_obs_dggr
         else:
             #Simulate and store trajectory
             y_sim_fgm ,u_sim_fgm, x0_obs_fgm, xd_obs_fgm = mpc.sim_mpc(use_FGM)
+            #Check that mpc has converged
+            assert np.all(y_sim_fgm[:,id_to_bpm][-1,:] < 2)
             u_sim_train[(k-1)*n_samples:k*n_samples, :] = u_sim_fgm[:,id_to_cm]
             xd_obs_train[(k-1)*n_samples:k*n_samples, :] = xd_obs_fgm
             x0_obs_train[(k-1)*n_samples:k*n_samples, :] = x0_obs_fgm
@@ -315,7 +317,7 @@ else:
 if train:
     data_dir = '../data'
     if trainRNN:
-        process.process_data_sequential(x0_obs_train, xd_obs_train, u_sim_train, data_dir, n_samples)
+        process.process_data_sequential(x0_obs_train, xd_obs_train, u_sim_train, data_dir, n_samples, use_dagger)
     else:    
         process.process_data_shuff(x0_obs_train, xd_obs_train, u_sim_train, data_dir, use_dagger)
     
