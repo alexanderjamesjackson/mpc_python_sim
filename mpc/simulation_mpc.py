@@ -46,7 +46,7 @@ RMy = RMorigy[np.ix_(id_to_bpm_y, id_to_cm_y)]
 #Observer and Regulator
 n_delay = 8
 
-fname = f'../data/mpc_data_13092022_nd{n_delay}.mat'
+fname = f'../data/systems/165statesystemnd8.mat'
 
 
 mat_data = loadmat(fname)

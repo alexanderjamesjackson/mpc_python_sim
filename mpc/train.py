@@ -34,14 +34,19 @@ if x_train.ndim == 3:
     RNN = True
 elif x_train.ndim == 2:
     RNN = False
+Lin = True
+if Lin:
+    RNN = False
+    Lin = True
 
 #Hyperparameters
-hidden_size = 32
-learning_rate = 1e-5
-num_epochs = 400
-weight_decay = 1e-4
-batch_size = 5
+hidden_size = 64
+learning_rate = 1e-4
+num_epochs = 1000
+weight_decay = 1e-6
+batch_size = 32
 num_layers = 1
+
 # Create TensorDatasets
 train_dataset = torch.utils.data.TensorDataset(x_train, u_train)
 test_dataset = torch.utils.data.TensorDataset(x_test, u_test)
@@ -85,12 +90,20 @@ with open(fname, 'wb') as f:
 
 if RNN:
     model = md.RNNController(n_state, hidden_size, n_ctrl, num_layers=num_layers)
-    criterion = md.get_loss()
+    
+
+elif Lin:
+    model = md.LinearController(n_state, n_ctrl)
 
 else:
     model = md.NNController(n_state, hidden_size, n_ctrl)
-    criterion = md.get_loss()
+
+
+criterion = md.get_loss()
 # Construct the NN model
+# model_path = '../data/model/model.ckpt'
+# nnparams = torch.load(model_path)
+# model.load_state_dict(nnparams)
 model.to(device)
 # Loss and optimizer
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
@@ -185,16 +198,14 @@ np.savez('../data/model/modelloss.npz' , epochs = epochs, train_losses = train_l
 torch.save(model.state_dict(), '../data/models/ckpt/tp-{}-ns-{}-hs-{}-bs-{}.ckpt'.format(model.type, n_state, hidden_size, batch_size))
 
 np.savez('../data/models/losses/tp-{}-ns-{}-hs-{}-bs-{}.npz'.format(model.type, n_state, hidden_size, batch_size), epochs = epochs, train_losses = train_losses, val_losses = val_losses)
-fig, axs = plt.subplots(1, 2, figsize=(15, 8))
 
-axs[0].plot(epochs, train_losses)
-axs[0].set_xlabel('Epoch')
-axs[0].set_ylabel('Loss')
-axs[0].set_title('Training Loss')
 
-axs[1].plot(epochs, val_losses)
-axs[1].set_xlabel('Epoch')
-axs[1].set_ylabel('Loss')
-axs[1].set_title('Validation Loss')
+
+plt.plot(epochs, train_losses, label='Train Loss')
+plt.plot(epochs, val_losses, label='Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+
 
 plt.show()

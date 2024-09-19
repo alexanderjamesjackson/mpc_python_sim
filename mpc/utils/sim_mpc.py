@@ -16,11 +16,11 @@ class Mpc:
         id_to_bpm, id_to_cm,
         A_awr, B_awr, C_awr, D_awr,
         SOFB_setp,beta_FGM,
-        ol_mode = False, dtype = np.float64, hil_mode = True):
+        ol_mode = False, dtype = np.float64, use_lqr = False):
 
         #Initialise solver parameters
+        self.use_lqr = use_lqr
         self.MAX_ITER  = 20
-        self.beta_fgm = beta_FGM
         self.n_samples = n_samples
         self.n_delay = n_delay
         self.dist = dist
@@ -37,6 +37,9 @@ class Mpc:
         self.Lxd_obs = Lxd_obs.astype(dtype)
         self.J_FGM = J_MPC.astype(dtype)
         self.J = sparse.csc_matrix(J_MPC, dtype=dtype)
+        self.q_mat = q_mat.astype(dtype)
+        self.beta_fgm = beta_FGM
+        self.y_max = y_max.astype(dtype)
         self.u_max = u_max.astype(dtype)
         self.u_rate = u_rate.astype(dtype)
         self.id_to_bpm = id_to_bpm
@@ -47,7 +50,7 @@ class Mpc:
         self.D_awr = D_awr.astype(dtype)
         self.SOFB_setp = SOFB_setp
         self.ol_mode = ol_mode
-        self.hil_mode = hil_mode
+
 
 
         #extract dimensions
@@ -58,49 +61,51 @@ class Mpc:
 
         #Variables for plant
         np.random.seed(42)
-        self.x_sim = np.zeros((self.nx_plant, 1))
+        self.x_sim_new = np.zeros((self.nx_plant, 1))
+        self.x_sim_old = np.zeros((self.nx_plant, 1))
         self.y_sim = np.zeros((self.ny_plant, n_samples))
         self.u_sim = np.zeros((self.nu_plant, n_samples))
+        self.x_sim = np.zeros((self.nu_plant, n_samples))
         self.u_sim_expert = np.zeros((self.nu_plant, n_samples))
 
         #Variables for AWR
         self.ny_awr , self.nx_awr = np.size(C_awr,0) , np.size(C_awr,1)
-        self.x_awr = np.zeros((self.nx_awr, 1))
+        self.x_awr_new = np.zeros((self.nx_awr, 1))
         self.y_awr = np.zeros((self.ny_awr, 1))
 
         #Variables for observer
-        self.x_obs_old = np.zeros((n_delay, self.nx_obs, 1), dtype=dtype)
-        self.x_obs_new = np.zeros((n_delay + 1, self.nx_obs, 1), dtype=dtype)
-        self.xd_obs_old = np.zeros((self.nx_obs, 1), dtype=dtype)
-        self.xd_obs_new = np.zeros((self.nx_obs, 1), dtype=dtype)
-        self.x0_obs = np.zeros((n_samples, self.nx_obs, 1))
-        self.xd_obs = np.zeros((n_samples, self.nx_obs, 1))
-        self.Apow = np.zeros((n_delay + 1, self.nx_obs, self.nx_obs), dtype=dtype)
-        
+        self.x_obs_old = np.zeros((self.nx_obs, n_delay + 1), dtype=dtype)
+        self.x_obs_new = np.zeros((self.nx_obs, n_delay + 1), dtype=dtype)
+        self.xd_obs_old = np.zeros((self.ny_obs, 1), dtype=dtype)
+        self.x0_obs = np.zeros((self.nx_obs, n_samples), dtype=dtype)
+        self.xd_obs = np.zeros((self.ny_obs, n_samples), dtype=dtype)
+        self.Apow = np.zeros((self.nx_obs*(n_delay + 1), self.nx_obs), dtype=dtype)
+        #FLAG
         #Compute elementwise powers in advance
         for i in range(n_delay + 1):
-            self.Apow[i] = (self.Ao ** i).astype(dtype)
+            self.Apow[i * self.nx_obs:(i+1) * self.nx_obs, :] = np.power(Ao, i)
 
         
-        self.q_mat = q_mat.astype(dtype)
-        self.y_max = y_max.astype(dtype)
-        self.u_max = u_max.astype(dtype)
+        
         self.y_mat = (self.Co @ self.Ao).astype(dtype)
-        self.y_meas = np.zeros((self.ny_obs, 1), dtype=dtype)
 
         #Setup constraints
-
+        #OSQP A Matrix
         self.A_constr = sparse.csr_matrix(np.vstack((np.eye(self.ny_obs), Co @ Bo)), dtype=dtype)
 
         self.l_constr = np.vstack(( 
             np.maximum(-u_max - SOFB_setp, -u_rate + self.y_awr),
-            -y_max - self.y_mat @ self.x_obs_new[0]
+            -y_max - self.y_mat @ self.x_obs_new[:,0:1]
         ))
 
         self.u_constr = np.vstack((
             np.minimum(u_max - SOFB_setp, u_rate + self.y_awr),
-            y_max - self.y_mat @ self.x_obs_new[0]
+            y_max - self.y_mat @ self.x_obs_new[:,0:1]
         ))
+
+        if self.use_lqr:
+            self.u_constr = np.ones((self.nu_obs,1)) * np.infty
+            self.l_constr = np.ones((self.nu_obs,1)) * -np.infty
 
         #Variables for FGM
         self.z_new = np.zeros((self.nu_obs, 1), dtype=dtype)   
@@ -128,62 +133,68 @@ class Mpc:
         if self.ol_mode:
             self.y_sim[:, k:k+1] = self.dist[:, k:k+1]
         else:
-            self.y_sim[:, k:k+1] = (self.Cp @ self.x_sim) + self.dist[:, k:k+1]
+            self.y_sim[:, k:k+1] = (self.Cp @ self.x_sim_new) + self.dist[:, k:k+1]
 
     def update_y_meas(self, k):
-        if self.hil_mode ==  True:
-            self.y_meas = (np.round(self.y_sim[self.id_to_bpm, k - self.n_delay][:, np.newaxis] * 1000, 0) * 0.001).astype(self.dtype)
-        else:
-            self.y_meas = self.y_sim[self.id_to_bpm, k-self.n_delay][:, np.newaxis].astype(self.dtype)
+        self.y_meas = self.y_sim[self.id_to_bpm, k-self.n_delay][:, np.newaxis].astype(self.dtype)
 
     def calc_obs_state(self, k):
-        self.x_obs_new[0] = (self.Ao @ self.x_obs_old[0]) + (self.Bo @ self.u_sim[self.id_to_cm, k-1][:, np.newaxis].astype(self.dtype))
-        self.xd_obs_new = self.Ad @ self.xd_obs_old
+        self.x_obs_new[:,0:1] = (self.Ao @ self.x_obs_old[:,0:1]) + (self.Bo @ self.u_sim[self.id_to_cm, k-1][:, np.newaxis].astype(self.dtype))
         for i in range(1, self.n_delay + 1):
-            self.x_obs_new[i] = self.x_obs_old[i-1]
+            self.x_obs_new[:,i:i+1] = self.x_obs_old[:,i-1:i]
+        
+        self.xd_obs_new = self.Ad @ self.xd_obs_old
+        
 
     def update_obs_measurement(self):
-        delta_y = self.y_meas - self.Co @ self.x_obs_new[self.n_delay] - self.Cd @ self.xd_obs_new
+        delta_y = self.y_meas - self.Co @ self.x_obs_new[:,self.n_delay:self.n_delay+1] - self.Cd @ self.xd_obs_new
         delta_xN = self.LxN_obs @ delta_y
         delta_xd = self.Lxd_obs @ delta_y
         self.xd_obs_new = self.xd_obs_new + delta_xd
-
-        for i in range(self.n_delay + 1):
-            self.x_obs_new[i] = self.x_obs_new[i] + self.Apow[self.n_delay - i] @ delta_xN
+        #FLAG
+        self.x_obs_new = self.x_obs_new +  np.fliplr(np.reshape(self.Apow @ delta_xN, (self.nx_obs, self.n_delay+1)))
 
     def update_obs_state(self,k):
         self.xd_obs_old = self.xd_obs_new
-        self.x_obs_old = self.x_obs_new[:self.n_delay][:][:]
-        self.x0_obs[k] = self.x_obs_new[0]
-        self.xd_obs[k] = self.xd_obs_new
+        for i in range(self.n_delay + 1):
+            self.x_obs_old[:,i:i+1] = self.x_obs_new[:,i:i+1]
+
+        self.x0_obs[:,k:k+1] = self.x_obs_new[:,0:1]
+        self.xd_obs[:,k:k+1] = self.xd_obs_new
 
     def update_q_limits(self):
         ####
-        self.q = self.q_mat @ np.vstack((self.x_obs_new[0], self.xd_obs_new))
-        if self.use_FGM:
-            self.l_constr = np.maximum(-self.u_max - self.SOFB_setp, -self.u_rate + self.y_awr)
-            self.u_constr = np.minimum(self.u_max - self.SOFB_setp, self.u_rate + self.y_awr)
-        else:
-        
-            if self.dtype == np.float32:
+        self.q = self.q_mat @ np.vstack((self.x_obs_new[:,0:1], self.xd_obs_new))
+        if not self.use_lqr:
+            if self.use_FGM:
+                self.l_constr = np.maximum(-self.u_max - self.SOFB_setp, -self.u_rate + self.y_awr)
+                self.u_constr = np.minimum(self.u_max - self.SOFB_setp, self.u_rate + self.y_awr)
+                assert np.any(self.l_constr <= self.u_constr), "Lower constraint is greater than upper constraint"
 
-                self.l_constr = np.vstack((
-                    np.maximum(-self.u_max - self.SOFB_setp.astype(self.dtype), -self.u_rate + self.y_awr.astype(self.dtype)),
-                    -self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype)
-                ))
-                self.u_constr = np.vstack((
-                    np.minimum(self.u_max - self.SOFB_setp.astype(self.dtype), self.u_rate + self.y_awr.astype(self.dtype)),
-                    self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype)
-                ))
             else:
-                self.l_constr = np.vstack((
-                    np.maximum(-self.u_max - self.SOFB_setp.astype(self.dtype), -self.u_rate + self.y_awr.astype(self.dtype)),
-                    -self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype) - self.xd_obs_new.astype(self.dtype)
-                ))
-                self.u_constr = np.vstack((
-                    np.minimum(self.u_max - self.SOFB_setp.astype(self.dtype), self.u_rate + self.y_awr.astype(self.dtype)),
-                    self.y_max - self.y_mat @ self.x_obs_new[0].astype(self.dtype) - self.xd_obs_new.astype(self.dtype)
-                ))
+            
+                if self.dtype == np.float32:
+
+                    self.l_constr = np.vstack((
+                        np.maximum(-self.u_max - self.SOFB_setp.astype(self.dtype), -self.u_rate + self.y_awr.astype(self.dtype)),
+                        -self.y_max - self.y_mat @ self.x_obs_new[:,0:1].astype(self.dtype)
+                    ))
+                    self.u_constr = np.vstack((
+                        np.minimum(self.u_max - self.SOFB_setp.astype(self.dtype), self.u_rate + self.y_awr.astype(self.dtype)),
+                        self.y_max - self.y_mat @ self.x_obs_new[:,0:1].astype(self.dtype)
+                    ))
+                else:
+                    self.l_constr = np.vstack((
+                        np.maximum(-self.u_max - self.SOFB_setp.astype(self.dtype), -self.u_rate + self.y_awr.astype(self.dtype)),
+                        -self.y_max - self.y_mat @ self.x_obs_new[:,0:1].astype(self.dtype) - self.xd_obs_new.astype(self.dtype)
+                    ))
+                    self.u_constr = np.vstack((
+                        np.minimum(self.u_max - self.SOFB_setp.astype(self.dtype), self.u_rate + self.y_awr.astype(self.dtype)),
+                        self.y_max - self.y_mat @ self.x_obs_new[:,0:1].astype(self.dtype) - self.xd_obs_new.astype(self.dtype)
+                    ))
+        
+
+
 
 
     #Solves the problem using OSQP and updates the AWR state
@@ -192,16 +203,20 @@ class Mpc:
         result = self.osqp_solver.solve()
         osqp_result = result.x[:self.nu_obs][:, np.newaxis]
         assert result.info.status_val in [1, 2], "OSQP solver did not find an optimal solution."
-        if self.hil_mode == True:
-            osqp_result = np.round(osqp_result * 1000000,0) * 0.000001
         self.u_sim[self.id_to_cm, k] = osqp_result.flatten()
 
-        self.x_awr = self.A_awr @ self.x_awr + self.B_awr @ osqp_result.astype(np.float64)
-        self.y_awr = self.C_awr @ self.x_awr + self.D_awr @ osqp_result.astype(np.float64)
+        self.x_awr_old = self.x_awr_new
+        self.x_awr_new = self.A_awr @ self.x_awr_old + self.B_awr @ osqp_result.astype(np.float64)
+        self.y_awr = self.C_awr @ self.x_awr_new + self.D_awr @ osqp_result.astype(np.float64)
 
 
     def update_plant_state(self,k):
-        self.x_sim = self.Ap @ self.x_sim + self.Bp @ self.u_sim[:, k:k+1]
+        #Make temp variable project u_sim 
+        # temp = np.maximum(self.l_constr, np.minimum(self.u_constr, self.u_sim[:, k:k+1]))
+        self.x_sim_old = self.x_sim_new
+        self.x_sim_new = self.Ap @ self.x_sim_old + self.Bp @ self.u_sim[:, k:k+1]
+        self.x_sim[:,k:k+1] = self.x_sim_old
+        
 
 
     #Solves the problem using FGM and updates the AWR state
@@ -214,18 +229,44 @@ class Mpc:
             self.z_new = np.maximum(self.l_constr, np.minimum(self.u_constr, t))
             out_global = (1+self.beta_fgm) * self.z_new - self.beta_fgm * self.z_old
         fgm_result = self.z_new
+        if k % 50 == 0:
+            sign = rand.choice([-1, 1])
+        else:
+            sign = 0
+        sign = 0
+        self.u_sim[self.id_to_cm, k] = fgm_result.flatten() + np.ones(self.id_to_cm.size) * 0.5 * sign
 
-        #sign = rand.choice([-1, 1])
-        self.u_sim[self.id_to_cm, k] = fgm_result.flatten() #+ np.ones(self.id_to_cm.size) * 0.08 * sign
-
-        self.x_awr = self.A_awr @ self.x_awr + self.B_awr @ fgm_result.astype(np.float64)
-        self.y_awr = self.C_awr @ self.x_awr + self.D_awr @ fgm_result.astype(np.float64)
+        self.x_awr_old = self.x_awr_new
+        self.x_awr_new = self.A_awr @ self.x_awr_old + self.B_awr @ fgm_result.astype(np.float64)
+        self.y_awr = self.C_awr @ self.x_awr_new + self.D_awr @ fgm_result.astype(np.float64)
 
     #Function to simulate the MPC
+    def checkSS(self,k,tol):
+        if np.all(abs(self.u_sim[self.id_to_cm,k] - self.u_sim[self.id_to_cm,k-1]) < tol):
+            self.ss_count += 1
+        else:
+            self.ss_count = 0
+        if self.ss_count > 10:
+            print("Steady state reached")
+            return True
+        else:
+            return False
+
+    def terminateSS(self,k, use_dagger = False):
+        self.u_sim = self.u_sim[:,0:k]
+        self.y_sim = self.y_sim[:,0:k]
+        self.x0_obs = self.x0_obs[:,0:k]
+        self.xd_obs = self.xd_obs[:,0:k]
+        if use_dagger:
+            self.u_sim_expert = self.u_sim_expert[:,0:k]
+        self.n_samples = k
+
 
     def sim_mpc(self, use_fgm):
         self.use_FGM = use_fgm
-        self.setupOSQP(False, False, False)
+        self.ss_count = 0
+        if not self.use_FGM:
+            self.setupOSQP(False, False, False)
 
         for k in range(self.n_samples):
             #Measurements
@@ -238,26 +279,36 @@ class Mpc:
                 self.calc_obs_state(k)
                 self.update_obs_measurement()
                 self.update_obs_state(k)
-                self.update_q_limits()
+                self.update_q_limits() 
+
                 if use_fgm:
                     self.solveFGM_update_awr(k)
                 else:
                     self.solveOSQP_update_awr(k)
             self.update_plant_state(k)
+            if self.checkSS(k, 1e-4):
+                self.terminateSS(k)
+                break
 
         self.u_sim = np.transpose(self.u_sim)
         self.y_sim = np.transpose(self.y_sim)
-        self.x0_obs = self.x0_obs.reshape((self.n_samples, self.nx_obs))
-        self.xd_obs = self.xd_obs.reshape((self.n_samples, self.nx_obs))
-        return self.y_sim, self.u_sim, self.x0_obs, self.xd_obs
+        self.x0_obs = np.transpose(self.x0_obs)
+        self.xd_obs = np.transpose(self.xd_obs)
+        self.x_sim = np.transpose(self.x_sim)
+        return self.y_sim, self.u_sim, self.x0_obs, self.xd_obs, self.x_sim, self.n_samples
     
 
     #Solves the MPC problem using nn
     def solvenn(self,k):
-        x_aug = torch.tensor(np.transpose(np.vstack((self.x_obs_new[0], self.xd_obs_new)))).float().to(self.device)
+        x_aug = np.transpose(np.vstack((self.x_obs_new[:,0:1], self.xd_obs_new)))
+        x_aug = torch.tensor(x_aug).float().to(self.device)
         self.u_nn = self.nn_controller(x_aug).detach().numpy()
         self.u_nn = np.transpose(self.u_nn)
-        #######
+        t = self.u_nn
+        self.u_nn = np.maximum(self.l_constr, np.minimum(self.u_constr, self.u_nn))
+        if np.any(self.u_nn != t):
+            print("lower constr: ", np.mean(self.l_constr))
+            print("NN Controller is saturating")
         self.u_sim[self.id_to_cm,k] = self.u_nn.flatten()
     
     #Solves the MPC problem using rnn
@@ -268,12 +319,14 @@ class Mpc:
         x_aug = torch.tensor(x_seq).float().to(self.device)
         self.u_nn = self.nn_controller(x_aug).detach().numpy()
         self.u_nn = np.transpose(self.u_nn)
+        self.u_nn = np.maximum(self.l_constr, np.minimum(self.u_constr, self.u_nn))
         self.u_sim[self.id_to_cm,k] = self.u_nn.flatten()
 
     #Updates the AWR state using nn
     def nn_update_awr(self):
-        self.x_awr = self.A_awr @ self.x_awr + self.B_awr @ self.u_nn
-        self.y_awr = self.C_awr @ self.x_awr + self.D_awr @ self.u_nn
+        self.x_awr_old = self.x_awr_new
+        self.x_awr_new = self.A_awr @ self.x_awr_old + self.B_awr @ self.u_nn
+        self.y_awr = self.C_awr @ self.x_awr_new + self.D_awr @ self.u_nn
 
     def solveFGM_expert(self, k):
 
@@ -295,9 +348,12 @@ class Mpc:
         self.nn_controller = model
         self.nn_controller.eval()
         self.nn_controller.to(torch.device(device))
+        #Make sure FGM is true so that limits are updated accordingly
+        self.use_FGM = True
 
         for k in range(self.n_samples):
             #Measurements
+
             if k % 100 == 0:
                 print(f"Simulation progress: {k/self.n_samples*100:.2f}%")
 
@@ -307,6 +363,8 @@ class Mpc:
                 self.calc_obs_state(k)
                 self.update_obs_measurement()
                 self.update_obs_state(k)
+                self.update_q_limits()
+
                 if RNN:
                     self.solvernn(k)
                 else:
@@ -316,12 +374,14 @@ class Mpc:
 
         self.u_sim = np.transpose(self.u_sim)
         self.y_sim = np.transpose(self.y_sim)
-        self.x0_obs = self.x0_obs.reshape((self.n_samples, self.nx_obs))
-        self.xd_obs = self.xd_obs.reshape((self.n_samples, self.nx_obs))
+        self.x0_obs = np.transpose(self.x0_obs)
+        self.xd_obs = np.transpose(self.xd_obs)
         return self.y_sim, self.u_sim, self.x0_obs, self.xd_obs
 
 
-    def sim_dagger(self, model, device):
+    def sim_dagger(self, model, device, sequence_length = 0, RNN = False):
+        self.sequence_length = sequence_length
+        self.ss_count = 0
         self.use_FGM = True
         self.device = device
         self.nn_controller = model
@@ -341,14 +401,20 @@ class Mpc:
                 self.update_obs_state(k)
                 self.update_q_limits()
                 self.solveFGM_expert(k)
-                self.solvenn(k)
+                if RNN:
+                    self.solvernn(k)
+                else:
+                    self.solvenn(k)
                 self.nn_update_awr()
             self.update_plant_state(k)
+            if self.checkSS(k, 1e-4):
+                self.terminateSS(k, use_dagger = True)
+                break
 
         self.u_sim_expert = np.transpose(self.u_sim_expert)
-        self.x0_obs = self.x0_obs.reshape((self.n_samples, self.nx_obs))
-        self.xd_obs = self.xd_obs.reshape((self.n_samples, self.nx_obs))
-        return self.u_sim_expert, self.x0_obs, self.xd_obs
+        self.x0_obs = np.transpose(self.x0_obs)
+        self.xd_obs = np.transpose(self.xd_obs)
+        return self.u_sim_expert, self.x0_obs, self.xd_obs, self.n_samples
 
 
 
