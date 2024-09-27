@@ -5,6 +5,57 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 import random as rand
+# Contains the MPC class responsible to running the simulation with a variety of controllers such as MPC, LQR and Neural Networks
+
+# Takes parameters:
+# n_samples: Number of samples to simulate
+# n_delay: Delay in the system
+# dist: Disturbance in the system
+# Ap: Plant A matrix
+# Bp: Plant B matrix
+# Cp: Plant C matrix
+# Ao: Observer A matrix
+# Bo: Observer B matrix
+# Co: Observer C matrix
+# Ad: Observer A matrix
+# Cd: Observer C matrix
+# LxN_obs: Observer gain for xN
+# Lxd_obs: Observer gain for xd
+# J_MPC: Cost function matrix
+# q_mat: Cost function vector
+# y_max: Output constraints
+# u_max: Input constraints
+# u_rate: Input rate constraints
+# id_to_bpm: Contains indices of active BPMs
+# id_to_cm: Contains indices of active CMs
+# A_awr: A matrix for AWR
+# B_awr: B matrix for AWR
+# C_awr: C matrix for AWR
+# D_awr: D matrix for AWR
+# SOFB_setp: Setpoint for SOFB
+# beta_FGM: Beta value for fast gradient method
+# ol_mode: Open loop mode
+# dtype: Data type
+# use_lqr: Use LQR controller, defaults to false
+
+# Methods usable in the class:
+
+# sim_mpc: 
+# Simulates with MPC controller, either using OSQP or FGM to solve the quadratic program, will exit if steady state is reached
+#   Inputs: use_fgm: Boolean to use FGM, if not then uses OSQP
+#   Outputs: y_sim, u_sim, x0_obs, xd_obs, x_sim, n_samples (How many samples were simulated until SS)
+
+
+
+# sim_nn: Simulates with Neural Network controller, will not exit early if steady state is reached
+#   Inputs: model: Neural Network model, device: Device to run the model on
+#   Outputs: y_sim, u_sim, x0_obs, xd_obs
+
+
+# sim_dagger: Simulates with Neural Network controller but records expert action, exits early if steady state is reached, uses FGM
+#   Inputs: model: Neural Network model, device: Device to run the model on
+#  Outputs: u_sim_expert, x0_obs, xd_obs, n_samples (How many samples were simulated until SS)
+
 
 class Mpc:
     def __init__(
@@ -151,7 +202,6 @@ class Mpc:
         delta_xN = self.LxN_obs @ delta_y
         delta_xd = self.Lxd_obs @ delta_y
         self.xd_obs_new = self.xd_obs_new + delta_xd
-        #FLAG
         self.x_obs_new = self.x_obs_new +  np.fliplr(np.reshape(self.Apow @ delta_xN, (self.nx_obs, self.n_delay+1)))
 
     def update_obs_state(self,k):
@@ -210,6 +260,7 @@ class Mpc:
         self.y_awr = self.C_awr @ self.x_awr_new + self.D_awr @ osqp_result.astype(np.float64)
 
 
+
     def update_plant_state(self,k):
         #Make temp variable project u_sim 
         # temp = np.maximum(self.l_constr, np.minimum(self.u_constr, self.u_sim[:, k:k+1]))
@@ -227,14 +278,11 @@ class Mpc:
             self.z_old = self.z_new
             t = self.J_FGM @ out_global - self.q
             self.z_new = np.maximum(self.l_constr, np.minimum(self.u_constr, t))
+            if np.any(self.z_new != t):
+                print("FGM Controller is saturating")
             out_global = (1+self.beta_fgm) * self.z_new - self.beta_fgm * self.z_old
         fgm_result = self.z_new
-        if k % 50 == 0:
-            sign = rand.choice([-1, 1])
-        else:
-            sign = 0
-        sign = 0
-        self.u_sim[self.id_to_cm, k] = fgm_result.flatten() + np.ones(self.id_to_cm.size) * 0.5 * sign
+        self.u_sim[self.id_to_cm, k] = fgm_result.flatten()
 
         self.x_awr_old = self.x_awr_new
         self.x_awr_new = self.A_awr @ self.x_awr_old + self.B_awr @ fgm_result.astype(np.float64)
@@ -283,6 +331,7 @@ class Mpc:
 
                 if use_fgm:
                     self.solveFGM_update_awr(k)
+
                 else:
                     self.solveOSQP_update_awr(k)
             self.update_plant_state(k)
@@ -311,17 +360,6 @@ class Mpc:
             print("NN Controller is saturating")
         self.u_sim[self.id_to_cm,k] = self.u_nn.flatten()
     
-    #Solves the MPC problem using rnn
-    def solvernn(self,k):
-        concat_states = np.hstack((self.x0_obs, self.xd_obs))
-        x_seq = concat_states[k-self.sequence_length+1:k+1]
-        x_seq = x_seq.transpose(2,0,1)
-        x_aug = torch.tensor(x_seq).float().to(self.device)
-        self.u_nn = self.nn_controller(x_aug).detach().numpy()
-        self.u_nn = np.transpose(self.u_nn)
-        self.u_nn = np.maximum(self.l_constr, np.minimum(self.u_constr, self.u_nn))
-        self.u_sim[self.id_to_cm,k] = self.u_nn.flatten()
-
     #Updates the AWR state using nn
     def nn_update_awr(self):
         self.x_awr_old = self.x_awr_new
@@ -342,15 +380,13 @@ class Mpc:
 
 
     #Simulate using nn
-    def sim_nn(self,model,device, sequence_length = 0, RNN = False):
-        self.sequence_length = sequence_length
+    def sim_nn(self,model,device):
         self.device = device
         self.nn_controller = model
         self.nn_controller.eval()
         self.nn_controller.to(torch.device(device))
         #Make sure FGM is true so that limits are updated accordingly
         self.use_FGM = True
-
         for k in range(self.n_samples):
             #Measurements
 
@@ -364,14 +400,9 @@ class Mpc:
                 self.update_obs_measurement()
                 self.update_obs_state(k)
                 self.update_q_limits()
-
-                if RNN:
-                    self.solvernn(k)
-                else:
-                    self.solvenn(k)
+                self.solvenn(k)
                 self.nn_update_awr()
             self.update_plant_state(k)
-
         self.u_sim = np.transpose(self.u_sim)
         self.y_sim = np.transpose(self.y_sim)
         self.x0_obs = np.transpose(self.x0_obs)
@@ -379,8 +410,7 @@ class Mpc:
         return self.y_sim, self.u_sim, self.x0_obs, self.xd_obs
 
 
-    def sim_dagger(self, model, device, sequence_length = 0, RNN = False):
-        self.sequence_length = sequence_length
+    def sim_dagger(self, model, device):
         self.ss_count = 0
         self.use_FGM = True
         self.device = device
@@ -401,10 +431,7 @@ class Mpc:
                 self.update_obs_state(k)
                 self.update_q_limits()
                 self.solveFGM_expert(k)
-                if RNN:
-                    self.solvernn(k)
-                else:
-                    self.solvenn(k)
+                self.solvenn(k)
                 self.nn_update_awr()
             self.update_plant_state(k)
             if self.checkSS(k, 1e-4):
@@ -415,10 +442,6 @@ class Mpc:
         self.x0_obs = np.transpose(self.x0_obs)
         self.xd_obs = np.transpose(self.xd_obs)
         return self.u_sim_expert, self.x0_obs, self.xd_obs, self.n_samples
-
-
-
-
 
 
 

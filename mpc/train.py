@@ -16,7 +16,7 @@ import pickle as pkl
 
 import threading
 from utils import model as md
-
+# Function to train a model on data found in data folder
 
 # cuda
 device = 'cpu'
@@ -29,22 +29,18 @@ u_train = torch.load(os.path.join(data_dir, 'u_train.pt'))
 u_test = torch.load(os.path.join(data_dir, 'u_test.pt'))
 
 #Settings
-#RNN toggle
-if x_train.ndim == 3:
-    RNN = True
-elif x_train.ndim == 2:
-    RNN = False
-Lin = True
-if Lin:
-    RNN = False
-    Lin = True
+
+
+Lin = True #If false will use general neural network
+LoadParams = False #If true will load the initial parameters from a saved model
+
 
 #Hyperparameters
 hidden_size = 64
 learning_rate = 1e-4
-num_epochs = 1000
-weight_decay = 1e-6
-batch_size = 32
+num_epochs = 2000
+weight_decay = 0
+batch_size = 1
 num_layers = 1
 
 # Create TensorDatasets
@@ -62,15 +58,10 @@ test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
 
 
 
-#If using rnn use x_train.size(2) 
-if RNN:
-    n_state, n_ctrl = x_train.size(2), u_train.size(1)
-    n_sc = n_state + n_ctrl
-    sequence_length = x_train.size(1)
-else:
-    n_state, n_ctrl = x_train.size(1), u_train.size(1)
-    n_sc = n_state + n_ctrl
-    sequence_length = 0
+# Get the sizes
+n_state, n_ctrl = x_train.size(1), u_train.size(1)
+n_sc = n_state + n_ctrl
+sequence_length = 0
 
 # Save the sizes
 sizes={
@@ -86,13 +77,10 @@ fname = os.path.join(data_dir, 'sizes.pkl')
 with open(fname, 'wb') as f:
     pkl.dump(sizes, f)
 
-
-
-if RNN:
-    model = md.RNNController(n_state, hidden_size, n_ctrl, num_layers=num_layers)
+# Initialize the model
     
 
-elif Lin:
+if Lin:
     model = md.LinearController(n_state, n_ctrl)
 
 else:
@@ -100,10 +88,13 @@ else:
 
 
 criterion = md.get_loss()
+
 # Construct the NN model
-# model_path = '../data/model/model.ckpt'
-# nnparams = torch.load(model_path)
-# model.load_state_dict(nnparams)
+if LoadParams:
+    model_path = '../data/model/model.ckpt'
+    nnparams = torch.load(model_path)
+    model.load_state_dict(nnparams)
+
 model.to(device)
 # Loss and optimizer
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)

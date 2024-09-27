@@ -5,8 +5,9 @@ from torch.nn.parameter import Parameter
 import torch.optim as optim
 import torch.nn.functional as F
 
+# Classes to define various models used in the MPC project
 
-# Define the neural network model
+# Define the arbitary neural network model
 
 class NNController(nn.Module):
     def __init__(self, n_state, hidden_size, n_ctrl):
@@ -46,7 +47,9 @@ class get_loss(nn.Module):
     def forward(self, predictions, targets):
         loss = torch.norm(predictions-targets)
         return loss
-    
+
+
+# Define the linear controller 
 class LinearController(nn.Module):
     def __init__(self, n_state, n_ctrl):
         super(LinearController, self).__init__()
@@ -57,28 +60,5 @@ class LinearController(nn.Module):
         return self.fc(x)
     
 
-class RNNController(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, num_layers=1):
-        super(RNNController, self).__init__()
-        self.type = 'rnn' + str(num_layers) + 'layers'
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
 
-        # Define the RNN layer
-        self.rnn = nn.RNN(input_size, hidden_size, num_layers, batch_first=True, nonlinearity='relu')
-
-        # Define the fully connected layer
-        self.fc = nn.Linear(hidden_size, output_size)
-
-    def forward(self, x):
-        # Set initial hidden state to zeros
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
-        
-        # Forward propagate through RNN
-        out, _ = self.rnn(x, h0)
-        
-        # Pass the last output from RNN to the fully connected layer
-        out = self.fc(out[:, -1, :])  # out[:, -1, :] takes the last time step
-        
-        return out
     

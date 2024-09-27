@@ -48,37 +48,4 @@ def process_data_shuff(x0_obs, xd_obs, u_sim, data_dir, use_dagger):
     torch.save(u_test.float(), os.path.join(data_dir, 'u_test.pt'))
 
 
-def process_data_sequential(x0_obs, xd_obs, u_sim, data_dir, n_samples, use_dagger):
-    expert_data_dir = os.path.join(data_dir, 'expert_data.npz')
-    x_data = np.hstack((x0_obs, xd_obs))
-    if use_dagger:
-        expert_data = np.load(expert_data_dir)
-        x_expert = expert_data['x']
-        u_expert = expert_data['u']
-        x_data = np.vstack((x_data, x_expert))
-        u_sim = np.vstack((u_sim, u_expert))
-
-    np.savez(expert_data_dir, x=x_data, u=u_sim)
-
-    n_traj = int(x_data.shape[0]/n_samples)
-    n_train = int(n_traj*0.8)
-    n_test = n_traj - n_train
-    sequence_length = 5
-
-
-    x_train = np.array([x_data[i:i+sequence_length] for i in range(n_train*n_samples-sequence_length)])
-    u_train = np.array([u_sim[i+sequence_length] for i in range(n_train*n_samples-sequence_length)])
-    x_test = np.array([x_data[i:i+sequence_length] for i in range(n_train*n_samples, n_traj*n_samples-sequence_length)])
-    u_test = np.array([u_sim[i+sequence_length] for i in range(n_train*n_samples, n_traj*n_samples-sequence_length)])
-
-    x_train = torch.tensor(x_train)
-    u_train = torch.tensor(u_train)
-    x_test = torch.tensor(x_test)
-    u_test = torch.tensor(u_test)
-
-    torch.save(x_train.float(), os.path.join(data_dir, 'x_train.pt'))
-    torch.save(x_test.float(), os.path.join(data_dir, 'x_test.pt'))
-    torch.save(u_train.float(), os.path.join(data_dir, 'u_train.pt'))
-    torch.save(u_test.float(), os.path.join(data_dir, 'u_test.pt'))
-
 

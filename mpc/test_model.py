@@ -33,13 +33,9 @@ def randModes(seed, RM, id_to_bpm, TOT_BPM, u_mag):
         #Generate random pertubation
         pert = np.random.uniform(-1,1,1)
         #Change the ith mode by the pertubation
-        weighted_combination += pert * UR[:, i] * u_mag
+        weighted_combination += pert *SR[i]* UR[:, i] * u_mag
     doff_tmp[id_to_bpm] = weighted_combination[:, np.newaxis]
     doff = doff_tmp * np.ones((1,n_samples))
-    #Add noise to the disturbance modes
-    # for i in range(n_samples):
-    #     if i % 50 == 0:
-    #         doff[id_to_bpm, i] = doff[id_to_bpm, i] + np.random.normal(0, 1, 1)
     return doff
 
 
@@ -49,20 +45,7 @@ start = time.time()
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-#Load model parameters
-size_file_path = '../data/sizes.pkl'
-with open(size_file_path, 'rb') as f:
-    sizes = pkl.load(f)
 
-n_state = sizes['n_state']
-n_ctrl = sizes['n_ctrl']
-hidden_size = sizes['hidden_size']
-n_sc = sizes['n_sc']
-num_layers = sizes['num_layers']
-sequence_length = sizes['sequence_length']
-sequence_length = 3
-model_path = '../data/model/model.ckpt'
-nnparams = torch.load(model_path)
 
 
 # options
@@ -71,16 +54,32 @@ pick_dir = 1
 dirs = ['horizontal','vertical']
 pick_direction = dirs[pick_dir]
 sim_IMC = False
-use_FGM = True
+use_FGM = False
 #Simulates multiple modes of disturbance to get training data
 train = False
-trainRNN = False    #///DO NOT USE IMP BROKEN
 #Toggle for comparing nn performance and mpc performance
 compare = False
-#Toggle for using DAGGER ///DO NOT USE IMP BROKEN
+#Toggle for using DAGGER
 use_dagger = False
-#Toggle for LQR limits
+#Toggle for LQR limits - Note that this is incompatible with OSQP
 use_lqr = False
+#Define max number of samples
+n_samples = 15000
+
+
+if use_dagger or compare:
+    #Load model parameters for nn
+    size_file_path = '../data/sizes.pkl'
+    with open(size_file_path, 'rb') as f:
+        sizes = pkl.load(f)
+
+    n_state = sizes['n_state']
+    n_ctrl = sizes['n_ctrl']
+    hidden_size = sizes['hidden_size']
+    n_sc = sizes['n_sc']
+    num_layers = sizes['num_layers']
+    model_path = '../data/model/model.ckpt'
+    nnparams = torch.load(model_path)
 
 #Hardlimits
 fname_correctors = '../data/corrector_data.csv'
@@ -105,7 +104,7 @@ id_to_bpm_x, id_to_cm_x, id_to_bpm_y, id_to_cm_y = DI.diamond_I_configuration_v5
 
 #first n_include BPMs and CMs active for testing
 
-n_include = 165
+n_include = 4
 
 
 id_to_bpm_x = id_to_bpm_x[:n_include]
@@ -116,25 +115,20 @@ id_to_cm_y = id_to_cm_y[:n_include]
 RMx = RMorigx[np.ix_(id_to_bpm_x, id_to_cm_x)]
 RMy = RMorigy[np.ix_(id_to_bpm_y, id_to_cm_y)]
 
-# condition_number = np.linalg.cond(RMy)
-# print(condition_number)
-# UR, SR, VR = np.linalg.svd(RMy)
-# print(SR[1])
 
-fname = '../data/systems/165statesystemnd8.mat'
+# Ensure this file is correct for n_delay and dimensions
+fname = '../data/systems/4statesystemnd8.mat'
 #OnlyValidforND8
 mat_data = loadmat(fname)
 
 #Observer and Regulator
 n_delay = 8
-# fname = f'../data/mpc_data_13092022_nd{n_delay}.mat'
-# mat_data = loadmat(fname)
+
 
 
 Fs = 10000
 Ts = 1/Fs
-# fname = fname = f'../data/mpc_data_13092022_nd{n_delay}.mat'
-# mat_data.update(loadmat(fname))
+
 
 if pick_direction == 'vertical':
     id_to_bpm = id_to_bpm_y
@@ -223,26 +217,23 @@ else:
     mat_data.update(loadmat('../data/awrSSx.mat'))
 
 
-n_samples = 15000
-
-
-
-#Initialise array of seeds for pertubations
-n_traj = 10
-trainseeds = np.linspace(1, n_traj*n_include, n_traj*n_include).astype(int)
-u_mags = np.linspace(1, 100, n_traj*n_include)
-n_tests = n_traj * n_include
-
-#Storage for training data
-u_sim_train = np.zeros((n_samples * n_tests, n_include))
-xd_obs_train = np.zeros((n_samples * n_tests, n_include))
-x0_obs_train = np.zeros((n_samples * n_tests, n_include))
-y_sim_train = np.zeros((n_samples * n_tests , n_include))
 
 #SOFB setpoints
 SOFB_setp = np.zeros((nu, 1))
 
 if train:
+    #Initialise array of seeds for pertubations
+    n_traj = 1000
+    trainseeds = np.linspace(1, n_traj*n_include, n_traj*n_include).astype(int)
+    u_mags = np.linspace(1, 100, n_traj*n_include)
+    n_tests = n_traj * n_include
+
+    #Storage for training data
+    u_sim_train = np.zeros((n_samples * n_tests, n_include))
+    xd_obs_train = np.zeros((n_samples * n_tests, n_include))
+    x0_obs_train = np.zeros((n_samples * n_tests, n_include))
+    y_sim_train = np.zeros((n_samples * n_tests , n_include))
+
     k = 0
     n_complete = 0
     for seed, u_mag in zip(trainseeds, u_mags):
@@ -271,7 +262,7 @@ if train:
             model = md.NNController(n_state, hidden_size, n_ctrl)
             model.load_state_dict(nnparams)
             #Simulate and store trajectory
-            u_sim_expert, x0_obs_dggr, xd_obs_dggr, n_simulated = mpc.sim_dagger(model, device, sequence_length=sequence_length, RNN=False)
+            u_sim_expert, x0_obs_dggr, xd_obs_dggr, n_simulated = mpc.sim_dagger(model, device)
             
             try:
                 assert(n_simulated < n_samples)
@@ -301,24 +292,14 @@ if train:
     u_sim_train = u_sim_train[:k, :]
     xd_obs_train = xd_obs_train[:k, :]
     x0_obs_train = x0_obs_train[:k, :]
-    # y_sim_train = y_sim_train[:k, :]
-    # plt.plot(u_sim_train * 0.001)
-    # plt.show()
-    # plt.plot(xd_obs_train)
-    # plt.show()
-    # plt.plot(x0_obs_train)
-    # plt.show()
+    data_dir = '../data'
+    process.process_data_shuff(x0_obs_train, xd_obs_train, u_sim_train, data_dir, use_dagger)
 
 else:
+    # If not training simulate once for comparison or evaluation
     #Generate random disturbance modes based on testing seed
-    doff = randModes(4220, RM, id_to_bpm, TOT_BPM, 100)
-    # mag_u = 1000
-    # UR,SR,VR = np.linalg.svd(RM)
-    # imode = 2
-    # tmp = UR[:, imode - 1] * SR[imode - 1] * mag_u
-    # doff_tmp = np.zeros((TOT_BPM, 1))
-    # doff_tmp[id_to_bpm] = tmp[:, np.newaxis]
-    # doff = doff_tmp * np.ones((1,n_samples))
+    doff = randModes(4200, RM, id_to_bpm, TOT_BPM, 100)
+
     #Simulation
     endt = n_samples*Ts - Ts
     Lsim = n_samples*Ts
@@ -339,15 +320,6 @@ else:
     y_sim_fgm ,u_sim_fgm, x0_obs_fgm, xd_obs_fgm,x_sim, n_simulated = mpc.sim_mpc(use_FGM)
 
 
-if train:
-    data_dir = '../data'
-    if trainRNN:
-        process.process_data_sequential(x0_obs_train, xd_obs_train, u_sim_train, data_dir, n_samples, use_dagger)
-    else:  
-        process.process_data_shuff(x0_obs_train, xd_obs_train, u_sim_train, data_dir, use_dagger)
-    
-
-
 if compare:
     #Initialise mpc 
     mpc = sim.Mpc(
@@ -363,7 +335,7 @@ if compare:
     model = md.LinearController(n_state,n_ctrl)
     model.load_state_dict(nnparams)
     #Simulate using nn model
-    y_sim_nn ,u_sim_nn, x0_obs_nn, xd_obs_nn = mpc.sim_nn(model, device, RNN=False, sequence_length=sequence_length)
+    y_sim_nn ,u_sim_nn, x0_obs_nn, xd_obs_nn = mpc.sim_nn(model, device)
     y_nn_longterm = y_sim_nn[:, id_to_bpm]
     y_sim_nn = y_sim_nn[:n_simulated, :]
     u_sim_nn = u_sim_nn[:n_simulated, :]
@@ -372,12 +344,6 @@ if compare:
 
     y_err = (y_sim_fgm - y_sim_nn) 
     u_err = (u_sim_fgm - u_sim_nn) 
-
-
-
-
-
-#Unpack Loss Data
 
 
 
